@@ -1,1 +1,1 @@
-add_common_plugin(ReassignSectionAddresses)
+add_plugin(ReassignSectionAddresses)
