@@ -1813,3 +1813,4 @@ Sun Aug 16 11:20:17 UTC 2026 -> Add data lock for busybox riscv32-gnu build stat
 Sun Aug 16 11:53:02 UTC 2026 -> Add data lock for reverse_iterator all build status data to be written
 Sun Aug 16 12:07:43 UTC 2026 -> Add data lock for linux-kernel riscv32 build status data to be written
 Sun Aug 16 12:08:00 UTC 2026 -> Add data lock for linux-kernel riscv64 build status data to be written
+Sun Aug 16 12:14:32 PM UTC 2026 -> Add data lock for zephyr aarch64 build status data to be written
