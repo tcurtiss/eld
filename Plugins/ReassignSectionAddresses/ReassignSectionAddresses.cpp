@@ -341,19 +341,6 @@ public:
               // data-carrying symbol set.
               if (!Sym.isObject())
                 continue;
-              // setSymbolAddress() unconditionally converts the symbol to
-              // an absolute symbol, which eld always emits with global
-              // binding. Skip local symbols so this plugin doesn't widen
-              // their binding as a side effect of reassigning addresses.
-              if (Sym.isLocal()) {
-                if (Trace)
-                  std::cout << "[ReassignSectionAddresses]   skipping local "
-                               "symbol '"
-                            << Sym.getName()
-                            << "' to avoid promoting it to an absolute "
-                               "global symbol\n";
-                continue;
-              }
               // DEBUG ONLY: capture the symbol's address prior to this
               // plugin's reassignment, for the debug dump below.
               uint64_t OrigAddr = Sym.getAddress();

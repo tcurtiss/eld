@@ -23,7 +23,13 @@
 # works when the plugin is registered directly from the linker script via
 # PLUGIN_OUTPUT_SECTION_ITER (passing the same Options string that
 # --plugin-config's YAML "Options:" field would carry) instead of via
-# --plugin-config. Also tests that a single plugin instance can target more
+# --plugin-config. Also tests that a global, a weak, and a local symbol each
+# retain their original binding after their address is reassigned to an
+# absolute value -- setSymbolAddress() only clears the symbol's FragmentRef
+# (which is what makes it emit as SHN_ABS) and must not also force its
+# binding to global, since a symbol's ELF binding (STB_LOCAL/GLOBAL/WEAK)
+# and its section index (e.g. SHN_ABS) are independent attributes. Also
+# tests that a single plugin instance can target more
 # than one output section at once (comma-delimited in the required section=
 # option), that byte-identical symbols reuse the same address even when they
 # live in different target sections, that dump=, when given, must list
@@ -85,6 +91,9 @@ RUN: %filecheck <randomized_addrs_dump2.txt %s --check-prefix=DUMP2
 RUN: rm -f randomized_addrs_dump1.txt randomized_addrs_dump2.txt
 RUN: %not %link %linkopts %t1.1.o %t2.2.o -T %p/Inputs/script_multi.t -o %t13.out --plugin-config %p/Inputs/plugin_multi_dump_mismatch.config -L %p/Inputs 2>&1 | %filecheck %s --check-prefix=DUMP-MISMATCH
 RUN: %not %link %linkopts %t1.1.o -T %p/Inputs/script.t -o %t14.out --plugin-config %p/Inputs/plugin_missing_section.config -L %p/Inputs 2>&1 | %filecheck %s --check-prefix=MISSING-SECTION
+RUN: %clang %clangopts -c %p/Inputs/3.c -o %t3.3.o -ffunction-sections -fdata-sections
+RUN: %link %linkopts %t3.3.o -T %p/Inputs/script.t -o %t15.out --plugin-config %p/Inputs/plugin.config -L %p/Inputs 2>&1 | %filecheck %s --check-prefix=LINK
+RUN: %nm %t15.out | %filecheck %s --check-prefix=NM-BINDING
 #LINK: Section .randomized_addrs placed in a non-PT_LOAD segment as explicitly allowed by a plugin
 #LINK-NOT: overlaps
 #LINK-NOT: not in any load segment
@@ -127,6 +136,9 @@ RUN: %not %link %linkopts %t1.1.o -T %p/Inputs/script.t -o %t14.out --plugin-con
 #NM-MULTI: {{0*}}2d553012 A sym6
 #NM-MULTI: {{0*}}2c186071 A sym7
 #NM-MULTI: {{0*}}2d553012 A sym8
+#NM-BINDING: {{0*}}f856ee2d A gsym
+#NM-BINDING: {{0*}}b3951bf1 a lsym
+#NM-BINDING: {{0*}}4c5e57f7 V wsym
 #SECTION: .randomized_addrs PROGBITS {{[0-9a-fA-F]+}} {{[0-9a-fA-F]+}} {{[0-9a-fA-F]+}} 00   A
 #PHDR: NULL{{.*}}
 #PHDR-NONE-NOT: NULL{{.*}}

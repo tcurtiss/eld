@@ -803,9 +803,11 @@ bool Module::resetSymbol(ResolveInfo *R, Fragment *F) {
 bool Module::setSymbolAddress(ResolveInfo *R, uint64_t Addr) {
   if (!R || !R->outSymbol())
     return false;
+  // Clearing the fragment ref (rather than setBinding(Absolute)) is what
+  // makes the symbol emit with SHN_ABS; see GNULDBackend::getSymbolShndx.
+  // The symbol's original binding (e.g. Local) is preserved.
   R->outSymbol()->setFragmentRef(FragmentRef::null());
   R->setDesc(ResolveInfo::Define);
-  R->setBinding(ResolveInfo::Absolute);
   R->setValue(Addr, /*IsFinal=*/true);
   return true;
 }
