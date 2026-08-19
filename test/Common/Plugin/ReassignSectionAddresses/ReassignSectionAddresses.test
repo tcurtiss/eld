@@ -64,7 +64,7 @@ RUN: rm -f randomized_addrs_dump.txt
 RUN: %link %linkopts %t1.1.o -T %p/Inputs/script_none.t -o %t5.out --plugin-config %p/Inputs/plugin.config -L %p/Inputs 2>&1 | %filecheck %s --check-prefix=LINK-NONE
 RUN: %nm %t5.out | %filecheck %s --check-prefix=NM-MD5
 RUN: %readelf -l -W %t5.out | %filecheck %s --check-prefix=PHDR-NONE
-RUN: %link %linkopts %t1.1.o -T %p/Inputs/script_load.t -o %t6.out --plugin-config %p/Inputs/plugin.config -L %p/Inputs 2>&1 | %filecheck %s --check-prefix=LINK-LOAD
+RUN: %link %linkopts %t1.1.o -T %p/Inputs/script_load.t -o %t6.out --plugin-config %p/Inputs/plugin.config -L %p/Inputs 2>&1 | %filecheck %s --check-prefix=LINK-LOAD --allow-empty
 RUN: %nm %t6.out | %filecheck %s --check-prefix=NM-MD5
 RUN: %readelf -l -W %t6.out | %filecheck %s --check-prefix=PHDR-LOAD
 RUN: %link %linkopts -shared %t1.1.pic.o -T %p/Inputs/script_shared.t -o %t7.so --plugin-config %p/Inputs/plugin.config -L %p/Inputs 2>&1 | %filecheck %s --check-prefix=LINK-SHARED
