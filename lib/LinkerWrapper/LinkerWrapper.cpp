@@ -981,6 +981,10 @@ bool LinkerWrapper::isVerbose() const {
   return m_Module.getConfig().getPrinter()->isVerbose();
 }
 
+bool LinkerWrapper::isTraced() const {
+  return m_Plugin->isTraced();
+}
+
 eld::Expected<std::vector<plugin::OutputSection>>
 LinkerWrapper::getAllOutputSections() const {
   CHECK_LINK_STATE(*this, "CreatingSections", "CreatingSegments", "AfterLayout");
