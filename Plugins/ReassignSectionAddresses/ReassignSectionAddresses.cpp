@@ -160,7 +160,7 @@ public:
       std::string Field = Options.substr(FieldStart, ColonPos - FieldStart);
       std::string::size_type EqPos = Field.find('=');
       if (EqPos == std::string::npos) {
-        if (!Field.empty())
+        if (!Field.empty() && getLinker()->isTraced())
           std::cout << "[ReassignSectionAddresses] Init: ignoring "
                        "malformed option field '"
                     << Field << "'\n";
@@ -177,7 +177,7 @@ public:
             Hash = HashKind::MD5;
           else if (Value == "sequential")
             Hash = HashKind::Sequential;
-          else
+          else if (getLinker()->isTraced())
             std::cout << "[ReassignSectionAddresses] Init: unknown hash '"
                       << Value << "', defaulting to md5\n";
         } else if (Key == "start") {
@@ -187,9 +187,10 @@ public:
           DumpList = Value;
           SawDump = true;
         } else {
-          std::cout << "[ReassignSectionAddresses] Init: ignoring unknown "
-                       "option key '"
-                    << Key << "'\n";
+          if (getLinker()->isTraced())
+            std::cout << "[ReassignSectionAddresses] Init: ignoring unknown "
+                         "option key '"
+                      << Key << "'\n";
         }
       }
       if (ColonPos == std::string::npos)
@@ -202,7 +203,8 @@ public:
       LastError =
           "section= is required and must specify at least one target "
           "output section";
-      std::cout << "[ReassignSectionAddresses] Init: " << LastError << "\n";
+      if (getLinker()->isTraced())
+        std::cout << "[ReassignSectionAddresses] Init: " << LastError << "\n";
       return;
     }
     for (size_t I = 0; I < TargetSections.size(); ++I)
@@ -219,8 +221,9 @@ public:
                << TargetSections.size() << " section(s), " << Paths.size()
                << " dump path(s) given)";
         LastError = ErrMsg.str();
-        std::cout << "[ReassignSectionAddresses] Init: " << LastError
-                  << "\n";
+        if (getLinker()->isTraced())
+          std::cout << "[ReassignSectionAddresses] Init: " << LastError
+                    << "\n";
         return;
       }
       DumpPaths = std::move(Paths);
@@ -228,6 +231,8 @@ public:
       DumpPaths.assign(TargetSections.size(), std::string());
     }
 
+    if (!getLinker()->isTraced())
+      return;
     std::cout << "[ReassignSectionAddresses] Init: target section(s)=";
     for (size_t I = 0; I < TargetSections.size(); ++I)
       std::cout << (I ? "," : "") << TargetSections[I];
@@ -250,9 +255,10 @@ public:
   void processOutputSection(OutputSection O) override {
     auto It = SectionIndex.find(O.getName());
     if (It != SectionIndex.end()) {
-      std::cout << "[ReassignSectionAddresses] processOutputSection: found "
-                   "target output section '"
-                << O.getName() << "'\n";
+      if (getLinker()->isTraced())
+        std::cout << "[ReassignSectionAddresses] processOutputSection: found "
+                     "target output section '"
+                  << O.getName() << "'\n";
       TargetOutputSections[It->second] = O;
     }
   }
