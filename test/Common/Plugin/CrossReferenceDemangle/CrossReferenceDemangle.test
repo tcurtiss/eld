@@ -1,0 +1,31 @@
+#---CrossReferenceDemangle.test----------------- Executable,LS --------------------#
+#BEGIN_COMMENT
+# Tests the CrossReferencePlugin's cpp_demangle option: with cpp_demangle=yes,
+# C++ symbol names in the dump are printed demangled (e.g. "ns::bar(int, int)")
+# rather than in their mangled form; by default (cpp_demangle unset), names are
+# printed exactly as they appear in the symbol table, i.e. still mangled.
+#END_COMMENT
+#START_TEST
+RUN: %clangxx %clangxxopts -c %p/Inputs/1.cpp -o %t1.1.o -ffunction-sections
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-MANGLED
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigDemangle.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-DEMANGLED
+RUN: rm -f xref_dump.txt
+#END_TEST
+
+LINK-NOT: Error
+
+DUMP-MANGLED: # Edges: <referrer> -> <callee> [flags]
+DUMP-MANGLED-DAG: _ZN2ns3barEii@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> _ZN2ns3fooEi@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MANGLED: # Symbols:
+DUMP-MANGLED-DAG: _ZN2ns3fooEi@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MANGLED-DAG: _ZN2ns3barEii@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+
+DUMP-DEMANGLED: # Edges: <referrer> -> <callee> [flags]
+DUMP-DEMANGLED-DAG: ns::bar(int, int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> ns::foo(int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DEMANGLED: # Symbols:
+DUMP-DEMANGLED-DAG: ns::foo(int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DEMANGLED-DAG: ns::bar(int, int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}

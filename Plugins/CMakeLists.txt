@@ -1,2 +1,3 @@
+add_subdirectory(CrossReference)
 add_subdirectory(HelloWorldPlugin)
 add_subdirectory(ReassignSectionAddresses)
