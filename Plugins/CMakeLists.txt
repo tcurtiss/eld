@@ -1,1 +1,2 @@
+add_subdirectory(CrossReference)
 add_subdirectory(HelloWorldPlugin)
