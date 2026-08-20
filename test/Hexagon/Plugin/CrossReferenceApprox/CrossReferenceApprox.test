@@ -1,0 +1,24 @@
+#---CrossReferenceApprox.test------------------ Executable,LS --------------------#
+#BEGIN_COMMENT
+# Tests the CrossReferencePlugin's nearest-preceding-symbol fallback: when a
+# chunk's symbols have no reliable size information (here, hand-written
+# assembly with no .size directives, so every symbol has size 0), a
+# relocation site can never fall inside any symbol's [offset, offset+size)
+# range. The plugin should still attribute the reference to the nearest
+# preceding symbol by offset, and mark the edge "(approx)" in the dump.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/1.s -o %t1.1.o
+RUN: rm -f xref_approx_dump.txt
+RUN: %link %linkopts %t1.1.o -e foo -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_approx_dump.txt %s --check-prefix=DUMP
+RUN: rm -f xref_approx_dump.txt
+#END_TEST
+
+LINK-NOT: Error
+
+DUMP: # Edges: <referrer> -> <callee> [flags]
+DUMP-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} (approx) -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP: # Symbols:
+DUMP-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}

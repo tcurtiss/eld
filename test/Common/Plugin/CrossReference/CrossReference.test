@@ -1,0 +1,81 @@
+#---CrossReference.test----------------------- Executable,LS --------------------#
+#BEGIN_COMMENT
+# Tests the CrossReferencePlugin example LinkerPlugin, which builds a
+# symbol-level caller-to-callee cross-reference table via
+# ActBeforeWritingOutput and getUses()/getAllSymbols(), and dumps it as text.
+#
+# Checks that a direct call is attributed exactly to its containing caller
+# symbol (main -> foo, main -> bar), each qualified with origin file, size,
+# and address ("name@file+size@address"). Also checks the show_gc plugin
+# option: by default (show_gc unset), a function that is unreferenced and
+# eligible for removal by --gc-sections is omitted from the dump entirely,
+# along with its outgoing edges; with show_gc=yes, it still appears in the
+# dump with its own outgoing edge intact (unused -> foo), reflecting the
+# full pre-GC connectivity graph. Garbage-collected status, when shown, is
+# indicated solely by an unknown ("?") address, with no separate tag.
+#
+# Also checks the format plugin option: format=text (the default) produces
+# the same dump as when the option is omitted; format=json produces the same
+# caller/callee and symbol data as a JSON object with "edges" and "symbols"
+# arrays instead of the "name@file+size@address" text notation; and an
+# unrecognized format is rejected with an error.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts --gc-sections %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-GC-HIDDEN
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts --gc-sections %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigShowGC.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-GC-SHOWN
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigFormatText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
+RUN: rm -f xref_dump.txt
+RUN: %not %link %linkopts %t1.1.o -e main -o %t5.out --plugin-config %p/Inputs/PluginConfigFormatInvalid.yaml 2>&1 | %filecheck %s --check-prefix=FORMAT-ERROR
+RUN: rm -f xref_dump.json
+RUN: %link %linkopts %t1.1.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigFormatJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import json; d = json.load(open('xref_dump.json')); edges = d['edges']; syms = {s['name'] for s in d['symbols']}; print('MAIN_FOO', any(e['referrer'] and e['referrer']['name'] == 'main' and e['target']['name'] == 'foo' for e in edges)); print('MAIN_BAR', any(e['referrer'] and e['referrer']['name'] == 'main' and e['target']['name'] == 'bar' for e in edges)); print('SYMS_OK', {'main', 'foo', 'bar'} <= syms)" | %filecheck %s --check-prefix=DUMP-JSON
+RUN: rm -f xref_dump.json
+#END_TEST
+
+LINK-NOT: Error
+
+FORMAT-ERROR: CrossReferencePlugin does not support format 'binary'; only 'text' and 'json' are supported
+FORMAT-ERROR: Fatal: Linking had errors
+
+DUMP-JSON: MAIN_FOO True
+DUMP-JSON: MAIN_BAR True
+DUMP-JSON: SYMS_OK True
+
+DUMP: # Edges: <referrer> -> <callee> [flags]
+DUMP-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP: # Symbols:
+DUMP-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+
+DUMP-GC-HIDDEN: # Edges: <referrer> -> <callee> [flags]
+DUMP-GC-HIDDEN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN-NOT: unused
+DUMP-GC-HIDDEN: # Symbols:
+DUMP-GC-HIDDEN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN-NOT: unused
+
+DUMP-GC-SHOWN: # Edges: <referrer> -> <callee> [flags]
+DUMP-GC-SHOWN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: unused@{{.*}}+0x{{[0-9a-f]+}}@? -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN: # Symbols:
+DUMP-GC-SHOWN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: unused@{{.*}}+0x{{[0-9a-f]+}}@?
+
