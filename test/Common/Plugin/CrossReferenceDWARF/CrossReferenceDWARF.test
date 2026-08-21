@@ -1,6 +1,6 @@
 #---CrossReferenceDWARF.test----------------- Executable,LS --------------------#
 #BEGIN_COMMENT
-# Tests the CrossReferencePlugin's usedwarf option: with usedwarf=yes, each
+# Tests the CrossReference's usedwarf option: with usedwarf=yes, each
 # symbol in the dump is additionally qualified with its declaring source
 # file and line number, as recovered from DWARF debug info (in text format,
 # appended as "@srcfile:line"; in JSON format, as "sourceFile"/"sourceLine"

@@ -1,5 +1,5 @@
 GlobalPlugins:
   - Type: LinkerPlugin
-    Name: CrossReferencePlugin
-    Library: CrossReferencePlugin
+    Name: CrossReference
+    Library: CrossReference
     Options: file=xref_dump.txt:format=binary

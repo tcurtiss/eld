@@ -1,6 +1,6 @@
 #---CrossReferenceDemangle.test----------------- Executable,LS --------------------#
 #BEGIN_COMMENT
-# Tests the CrossReferencePlugin's cpp_demangle option: with cpp_demangle=yes,
+# Tests the CrossReference's cpp_demangle option: with cpp_demangle=yes,
 # C++ symbol names in the dump are printed demangled (e.g. "ns::bar(int, int)")
 # rather than in their mangled form; by default (cpp_demangle unset), names are
 # printed exactly as they appear in the symbol table, i.e. still mangled.
