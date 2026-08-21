@@ -1,0 +1,27 @@
+#---CrossReferenceTrampoline.test--------------- Executable,LS --------------------#
+#BEGIN_COMMENT
+# Tests the CrossReferencePlugin's trampoline collapsing: when a call is
+# resolved through a linker-generated branch island/stub (forced here by
+# placing 'bar' far away from 'baz' via a linker script), the plugin should
+# report a single edge directly from the original referrer ('baz') to the
+# real target symbol ('bar'), tagged "[trampoline]", rather than two hops
+# through the synthetic stub symbol.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -o %t1.1.o %p/Inputs/1.c -c -ffunction-sections
+RUN: rm -f xref_trampoline_dump.txt
+RUN: %link %emulation %linkopts -o %t1.1.out %t1.1.o -T %p/Inputs/script.t --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_trampoline_dump.txt %s --check-prefix=DUMP
+RUN: rm -f xref_trampoline_dump.txt
+#END_TEST
+
+LINK-NOT: Error
+
+DUMP: # Edges: <referrer> -> <callee> [flags]
+DUMP-DAG: baz@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DAG: baz@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} [trampoline]
+DUMP-NOT: trampoline_for_bar
+DUMP: # Symbols:
+DUMP-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DAG: baz@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
