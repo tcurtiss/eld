@@ -1,0 +1,56 @@
+#---CrossReferenceExclude.test----------------- Executable,LS --------------------#
+#BEGIN_COMMENT
+# Tests the CrossReference's exclude_symbols and exclude_files options: each
+# takes a comma-delimited list of glob patterns (see llvm::GlobPattern).
+#
+# exclude_symbols= filters out any symbol whose (printed) name matches one of
+# the patterns, along with any edge in which it appears as referrer or
+# target -- here "ba*" matches both "bar" and "baz", so both are removed from
+# the symbols list and from the main -> bar / main -> baz edges, while main
+# and foo (and main -> foo) remain.
+#
+# exclude_files= filters out any symbol whose origin file's resolved path
+# matches one of the patterns -- here "*.2.o" matches the second object file
+# (which defines baz), so baz and its edge are removed while symbols from the
+# first object file remain.
+#
+# A malformed glob pattern (an unterminated "[" character class) is reported
+# as a link error.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections
+RUN: %clang %clangopts -c %p/Inputs/2.c -o %t1.2.o -ffunction-sections
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o %t1.2.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfigExcludeSymbols.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-SYMBOLS
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o %t1.2.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigExcludeFiles.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-FILES
+RUN: rm -f xref_dump.txt
+RUN: %not %link %linkopts %t1.1.o %t1.2.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigExcludeSymbolsInvalid.yaml 2>&1 | %filecheck %s --check-prefix=GLOB-ERROR
+#END_TEST
+
+LINK-NOT: Error
+
+GLOB-ERROR: CrossReference could not parse glob pattern '[unterminated'
+GLOB-ERROR: Fatal: Linking had errors
+
+DUMP-EXCLUDE-SYMBOLS: # Edges: <referrer> -> <callee> [flags]
+DUMP-EXCLUDE-SYMBOLS-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-SYMBOLS-NOT: bar
+DUMP-EXCLUDE-SYMBOLS-NOT: baz
+DUMP-EXCLUDE-SYMBOLS: # Symbols:
+DUMP-EXCLUDE-SYMBOLS-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-SYMBOLS-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-SYMBOLS-NOT: bar
+DUMP-EXCLUDE-SYMBOLS-NOT: baz
+
+DUMP-EXCLUDE-FILES: # Edges: <referrer> -> <callee> [flags]
+DUMP-EXCLUDE-FILES-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES-NOT: baz
+DUMP-EXCLUDE-FILES: # Symbols:
+DUMP-EXCLUDE-FILES-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES-NOT: baz

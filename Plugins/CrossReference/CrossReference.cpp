@@ -109,6 +109,57 @@
 //                            stores these strings inline (e.g. clang's
 //                            "-gdwarf-2 -mllvm -dwarf-inlined-strings=Enable")
 //                            avoids the affected forms and resolves correctly.
+//   exclude_symbols=<globs> -- comma-delimited list of glob patterns (see
+//                            llvm::GlobPattern); a symbol is omitted from
+//                            the dump, and from any edge it would otherwise
+//                            appear in as referrer or target, if its name
+//                            matches any pattern. Matching is done against
+//                            the demangled name when cpp_demangle=yes, and
+//                            the raw (possibly mangled) name otherwise, to
+//                            match what is actually printed.
+//   exclude_files=<globs>  -- comma-delimited list of glob patterns; a
+//                            symbol is omitted (same as exclude_symbols) if
+//                            its origin file's resolved path matches any
+//                            pattern.
+//   include_symbols=<globs> -- comma-delimited list of glob patterns; if
+//                            given, a symbol (and any edge it would
+//                            otherwise appear in) is omitted unless its
+//                            (printed) name matches at least one pattern.
+//                            Name matching follows the same demangle rule as
+//                            exclude_symbols. Combines with exclude_symbols/
+//                            exclude_files: a symbol must match an include
+//                            pattern (if any are given) *and* fail to match
+//                            every exclude pattern to be kept.
+//   exclude_local=yes|no  -- whether to omit local (STB_LOCAL) symbols --
+//                            e.g. static functions/data, and compiler- or
+//                            assembler-generated labels such as ".L0" or
+//                            "$d" -- from the dump, along with any edge they
+//                            would otherwise appear in (default: no).
+//   exclude_functions=yes|no -- whether to omit function (STT_FUNC) symbols
+//                            from the dump, along with any edge they would
+//                            otherwise appear in (default: no).
+//   exclude_data=yes|no   -- whether to omit data/object (STT_OBJECT)
+//                            symbols from the dump, along with any edge
+//                            they would otherwise appear in (default: no).
+//                            Combined with exclude_functions=yes, this omits
+//                            every typed symbol, leaving only symbols whose
+//                            type is neither (e.g. sections or files).
+//   min_size=<bytes>      -- omit any symbol smaller than this many bytes,
+//                            along with any edge it would otherwise appear
+//                            in (default: 0, i.e. no minimum).
+//   min_refs=<n>          -- omit any symbol with fewer than n incoming
+//                            edges, along with any edge it would otherwise
+//                            appear in as referrer or target (default: 0,
+//                            i.e. no minimum). The incoming-edge count used
+//                            for this test is taken from the full recorded
+//                            edge graph, before any other filtering option
+//                            is applied.
+//   exclude_intra_file=yes|no -- whether to omit an edge whose referrer and
+//                            target both originate from the same input
+//                            file's resolved path, to focus the dump on
+//                            cross-file references (default: no). Unlike
+//                            the other filters, this affects only edges, not
+//                            the symbols list.
 // e.g. "file=xref_dump.txt:show_gc=yes:cpp_demangle=yes".
 //
 //===----------------------------------------------------------------------===//
@@ -116,8 +167,12 @@
 #include "LinkerPlugin.h"
 #include "PluginVersion.h"
 #include "llvm/Demangle/Demangle.h"
+#include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/JSON.h"
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -231,6 +286,87 @@ public:
         }
         continue;
       }
+      if (Key == "exclude_symbols") {
+        if (!parseGlobList(Value, ExcludeSymbolPatterns))
+          return;
+        continue;
+      }
+      if (Key == "exclude_files") {
+        if (!parseGlobList(Value, ExcludeFilePatterns))
+          return;
+        continue;
+      }
+      if (Key == "include_symbols") {
+        if (!parseGlobList(Value, IncludeSymbolPatterns))
+          return;
+        continue;
+      }
+      if (Key == "exclude_local") {
+        if (!parseYesNo(Value, ExcludeLocal)) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's exclude_local option must be 'yes' or "
+              "'no', got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "exclude_functions") {
+        if (!parseYesNo(Value, ExcludeFunctions)) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's exclude_functions option must be 'yes' "
+              "or 'no', got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "exclude_data") {
+        if (!parseYesNo(Value, ExcludeData)) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's exclude_data option must be 'yes' or "
+              "'no', got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "min_size") {
+        if (!parseNonNegativeInt(Value, MinSize)) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's min_size option must be a non-negative "
+              "integer, got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "min_refs") {
+        if (!parseNonNegativeInt(Value, MinRefs)) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's min_refs option must be a non-negative "
+              "integer, got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "exclude_intra_file") {
+        if (!parseYesNo(Value, ExcludeIntraFile)) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's exclude_intra_file option must be 'yes' "
+              "or 'no', got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
       HasError = true;
       getLinker()->reportDiag(getLinker()->getErrorDiagID(
           "CrossReference does not recognize option '%0'"), Key);
@@ -252,6 +388,7 @@ public:
     collectAllSymbols();
     buildChunkSymbolIndex();
     walkReferences();
+    computeIncomingRefCounts();
     if (UseDWARF)
       buildDWARFIndex();
     writeDump();
@@ -277,6 +414,129 @@ private:
       return true;
     }
     return false;
+  }
+
+  // Parses Value as a non-negative base-10 integer, rejecting empty
+  // strings, a leading '-' (strtoull would otherwise accept it and wrap
+  // around), and any trailing non-digit characters.
+  static bool parseNonNegativeInt(const std::string &Value, uint64_t &Out) {
+    if (Value.empty() || Value.find('-') != std::string::npos)
+      return false;
+    const char *Begin = Value.c_str();
+    char *End = nullptr;
+    errno = 0;
+    unsigned long long V = std::strtoull(Begin, &End, 10);
+    if (End != Begin + Value.size() || errno == ERANGE)
+      return false;
+    Out = V;
+    return true;
+  }
+
+  // Splits Value on commas and compiles each piece as a glob pattern,
+  // appending the results to Patterns. The glob text itself is stashed in
+  // GlobStorage first, since llvm::GlobPattern stores a StringRef into
+  // whatever string it was created from rather than copying it; GlobStorage
+  // is a deque so earlier elements' addresses stay stable as later globs are
+  // added. Reports a diagnostic and returns false on the first malformed
+  // pattern.
+  bool parseGlobList(const std::string &Value,
+                      std::vector<llvm::GlobPattern> &Patterns) {
+    std::istringstream Globs(Value);
+    std::string Glob;
+    while (std::getline(Globs, Glob, ',')) {
+      if (Glob.empty())
+        continue;
+      const std::string &Stored = GlobStorage.emplace_back(std::move(Glob));
+      llvm::Expected<llvm::GlobPattern> ExpPattern =
+          llvm::GlobPattern::create(Stored);
+      if (!ExpPattern) {
+        HasError = true;
+        getLinker()->reportDiag(
+            getLinker()->getErrorDiagID(
+                "CrossReference could not parse glob pattern '%0': %1"),
+            Stored, llvm::toString(ExpPattern.takeError()));
+        return false;
+      }
+      Patterns.push_back(std::move(ExpPattern.get()));
+    }
+    return true;
+  }
+
+  // Returns true if Sym should be omitted from the dump (and from any edge
+  // it participates in) because its name matches an exclude_symbols
+  // pattern, or its origin file matches an exclude_files pattern, or it
+  // fails to match any include_symbols pattern (when given), or it is a
+  // local symbol and exclude_local=yes, or it is a function/data symbol
+  // and exclude_functions/exclude_data=yes, or it is smaller than
+  // min_size, or it has fewer than min_refs incoming edges.
+  bool isExcluded(const Symbol &Sym) const {
+    std::string Name;
+    auto GetName = [&]() -> const std::string & {
+      if (Name.empty()) {
+        Name = Sym.getName();
+        if (CppDemangle)
+          Name = llvm::demangle(Name);
+      }
+      return Name;
+    };
+    if (!ExcludeSymbolPatterns.empty()) {
+      for (const llvm::GlobPattern &Pattern : ExcludeSymbolPatterns)
+        if (Pattern.match(GetName()))
+          return true;
+    }
+    if (!ExcludeFilePatterns.empty()) {
+      std::string File = Sym.getResolvedPath();
+      for (const llvm::GlobPattern &Pattern : ExcludeFilePatterns)
+        if (Pattern.match(File))
+          return true;
+    }
+    if (!IncludeSymbolPatterns.empty()) {
+      bool Matched = false;
+      for (const llvm::GlobPattern &Pattern : IncludeSymbolPatterns) {
+        if (Pattern.match(GetName())) {
+          Matched = true;
+          break;
+        }
+      }
+      if (!Matched)
+        return true;
+    }
+    if (ExcludeLocal && Sym.isLocal())
+      return true;
+    if (ExcludeFunctions && Sym.isFunction())
+      return true;
+    if (ExcludeData && Sym.isObject())
+      return true;
+    if (MinSize > 0 && Sym.getSize() < MinSize)
+      return true;
+    if (MinRefs > 0) {
+      auto It = IncomingRefCount.find(Sym);
+      uint64_t Count = It != IncomingRefCount.end() ? It->second : 0;
+      if (Count < MinRefs)
+        return true;
+    }
+    return false;
+  }
+
+  // Returns true if Edge should be omitted because exclude_intra_file=yes
+  // and its referrer and target both originate from the same resolved
+  // source file. Unlike isExcluded(), this only ever affects edges: the
+  // symbols themselves are still listed in the "# Symbols:" section.
+  bool isIntraFileExcluded(const XRefEdge &E) const {
+    if (!ExcludeIntraFile || !E.Referrer)
+      return false;
+    return E.Referrer.getResolvedPath() == E.Target.getResolvedPath();
+  }
+
+  // Populates IncomingRefCount (symbol -> number of edges targeting it)
+  // from the full, unfiltered Edges graph, so that min_refs reflects true
+  // connectivity regardless of what other filtering options later remove
+  // from the dump.
+  void computeIncomingRefCounts() {
+    if (MinRefs == 0)
+      return;
+    for (const XRefEdge &E : Edges)
+      ++IncomingRefCount[E.Target];
   }
 
   // Populates StubSymbolToTarget (stub symbol -> real target symbol) and
@@ -573,6 +833,10 @@ private:
       if (!ShowGC && (E.Target.isGarbageCollected() ||
                        (E.Referrer && E.Referrer.isGarbageCollected())))
         continue;
+      if (isExcluded(E.Target) || (E.Referrer && isExcluded(E.Referrer)))
+        continue;
+      if (isIntraFileExcluded(E))
+        continue;
       Out << referrerToString(E.Referrer, E.Kind) << " -> "
           << qualifySymbol(E.Target);
       if (E.Trampoline)
@@ -582,6 +846,8 @@ private:
     Out << "# Symbols:\n";
     for (Symbol &Sym : AllSymbols) {
       if (!ShowGC && Sym.isGarbageCollected())
+        continue;
+      if (isExcluded(Sym))
         continue;
       Out << qualifySymbol(Sym) << "\n";
     }
@@ -593,11 +859,17 @@ private:
       if (!ShowGC && (E.Target.isGarbageCollected() ||
                        (E.Referrer && E.Referrer.isGarbageCollected())))
         continue;
+      if (isExcluded(E.Target) || (E.Referrer && isExcluded(E.Referrer)))
+        continue;
+      if (isIntraFileExcluded(E))
+        continue;
       JSONEdges.push_back(edgeToJSON(E));
     }
     llvm::json::Array JSONSymbols;
     for (Symbol &Sym : AllSymbols) {
       if (!ShowGC && Sym.isGarbageCollected())
+        continue;
+      if (isExcluded(Sym))
         continue;
       JSONSymbols.push_back(symbolToJSON(Sym));
     }
@@ -628,6 +900,17 @@ private:
   bool CppDemangle = false;
   bool UseDWARF = false;
   OutputFormat Format = OutputFormat::Text;
+  std::deque<std::string> GlobStorage;
+  std::vector<llvm::GlobPattern> ExcludeSymbolPatterns;
+  std::vector<llvm::GlobPattern> ExcludeFilePatterns;
+  std::vector<llvm::GlobPattern> IncludeSymbolPatterns;
+  bool ExcludeLocal = false;
+  bool ExcludeFunctions = false;
+  bool ExcludeData = false;
+  uint64_t MinSize = 0;
+  uint64_t MinRefs = 0;
+  bool ExcludeIntraFile = false;
+  std::unordered_map<Symbol, uint64_t> IncomingRefCount;
   std::unordered_map<Symbol, Symbol> StubSymbolToTarget;
   std::unordered_set<Chunk> StubChunks;
   std::unordered_map<Chunk, std::vector<SymbolOffset>> ChunkSymbolsCache;

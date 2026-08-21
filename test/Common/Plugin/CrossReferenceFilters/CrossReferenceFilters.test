@@ -1,0 +1,155 @@
+#---CrossReferenceFilters.test----------------- Executable,LS --------------------#
+#BEGIN_COMMENT
+# Tests the CrossReference plugin options that filter the dump by properties
+# other than a glob pattern on name/file (which exclude_symbols/exclude_files
+# already cover -- see CrossReferenceExclude.test):
+#   - include_symbols=<globs>: an allowlist counterpart to exclude_symbols; a
+#     symbol (and any edge it appears in) is omitted unless its name matches
+#     at least one pattern.
+#   - exclude_local=yes: omits local symbols -- both user-written statics
+#     (e.g. "helper") and compiler-generated labels (e.g. the RISC-V
+#     "$xrv64..." ISA-string label and the "$d" data-marker label) -- and any
+#     edge they appear in.
+#   - min_size=<bytes>: omits any symbol smaller than the given size, and any
+#     edge it appears in.
+#   - min_refs=<n>: omits any symbol with fewer than n incoming edges
+#     (counted before any other filter is applied), and any edge it appears
+#     in; a malformed (non-numeric) value is reported as a link error.
+#   - exclude_intra_file=yes: omits edges whose referrer and target are both
+#     defined in the same input file, without affecting the symbols list.
+#   - exclude_functions=yes: omits function symbols, and any edge they
+#     appear in.
+#   - exclude_data=yes: omits data/object symbols, and any edge they appear
+#     in; combined with exclude_functions=yes, this omits every typed
+#     symbol, leaving only untyped/section/file symbols and edges.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections -fdata-sections
+RUN: %clang %clangopts -c %p/Inputs/2a.c -o %t1.2a.o -ffunction-sections -fdata-sections
+RUN: %clang %clangopts -c %p/Inputs/2b.c -o %t1.2b.o -ffunction-sections -fdata-sections
+
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfigIncludeSymbols.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-INCLUDE-SYMBOLS
+
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigExcludeLocal.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-LOCAL
+
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigMinSize.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-MIN-SIZE
+
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigMinRefs.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-MIN-REFS
+
+RUN: %not %link %linkopts %t1.1.o -e main -o %t5.out --plugin-config %p/Inputs/PluginConfigMinSizeInvalid.yaml 2>&1 | %filecheck %s --check-prefix=MIN-SIZE-ERROR
+
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.2a.o %t1.2b.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigExcludeIntraFile.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-INTRA-FILE
+RUN: rm -f xref_dump.txt
+
+RUN: %link %linkopts %t1.1.o -e main -o %t7.out --plugin-config %p/Inputs/PluginConfigExcludeFunctions.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-FUNCTIONS
+
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t8.out --plugin-config %p/Inputs/PluginConfigExcludeData.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-DATA
+RUN: rm -f xref_dump.txt
+#END_TEST
+
+LINK-NOT: Error
+
+MIN-SIZE-ERROR: CrossReference's min_size option must be a non-negative integer, got 'abc'
+MIN-SIZE-ERROR: Fatal: Linking had errors
+
+DUMP-INCLUDE-SYMBOLS: # Edges: <referrer> -> <callee> [flags]
+DUMP-INCLUDE-SYMBOLS-NOT: ->
+DUMP-INCLUDE-SYMBOLS: # Symbols:
+DUMP-INCLUDE-SYMBOLS-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-INCLUDE-SYMBOLS-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-INCLUDE-SYMBOLS-NOT: callee_many
+DUMP-INCLUDE-SYMBOLS-NOT: callee_once
+DUMP-INCLUDE-SYMBOLS-NOT: helper
+DUMP-INCLUDE-SYMBOLS-NOT: main@
+
+DUMP-EXCLUDE-LOCAL: # Edges: <referrer> -> <callee> [flags]
+DUMP-EXCLUDE-LOCAL-NOT: $
+DUMP-EXCLUDE-LOCAL-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL: # Symbols:
+DUMP-EXCLUDE-LOCAL-NOT: $
+DUMP-EXCLUDE-LOCAL-DAG: callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-NOT: helper@{{.*}}
+DUMP-EXCLUDE-LOCAL-NOT: tiny@{{.*}}
+
+DUMP-MIN-SIZE: # Edges: <referrer> -> <callee> [flags]
+DUMP-MIN-SIZE-NOT: callee_many
+DUMP-MIN-SIZE-NOT: callee_once
+DUMP-MIN-SIZE: # Symbols:
+DUMP-MIN-SIZE-DAG: helper@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE-NOT: callee_many
+DUMP-MIN-SIZE-NOT: callee_once
+DUMP-MIN-SIZE-NOT: tiny@
+
+DUMP-MIN-REFS: # Edges: <referrer> -> <callee> [flags]
+DUMP-MIN-REFS: # Symbols:
+DUMP-MIN-REFS-DAG: callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-REFS-DAG: tiny@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-REFS-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-REFS-NOT: callee_once
+DUMP-MIN-REFS-NOT: caller1
+DUMP-MIN-REFS-NOT: caller2
+DUMP-MIN-REFS-NOT: main@
+DUMP-MIN-REFS-NOT: helper@
+
+DUMP-EXCLUDE-INTRA-FILE: # Edges: <referrer> -> <callee> [flags]
+DUMP-EXCLUDE-INTRA-FILE-DAG: calls_remote@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> b_fn@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-NOT: calls_local@{{.*}} -> local_fn
+DUMP-EXCLUDE-INTRA-FILE-NOT: main@{{.*}} -> calls_local
+DUMP-EXCLUDE-INTRA-FILE-NOT: main@{{.*}} -> calls_remote
+DUMP-EXCLUDE-INTRA-FILE: # Symbols:
+DUMP-EXCLUDE-INTRA-FILE-DAG: local_fn@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: calls_local@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: calls_remote@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: b_fn@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+
+DUMP-EXCLUDE-FUNCTIONS: # Edges: <referrer> -> <callee> [flags]
+DUMP-EXCLUDE-FUNCTIONS-NOT: ->
+DUMP-EXCLUDE-FUNCTIONS: # Symbols:
+DUMP-EXCLUDE-FUNCTIONS-NOT: helper@
+DUMP-EXCLUDE-FUNCTIONS-NOT: caller1@
+DUMP-EXCLUDE-FUNCTIONS-NOT: caller2@
+DUMP-EXCLUDE-FUNCTIONS-NOT: callee_many@
+DUMP-EXCLUDE-FUNCTIONS-NOT: callee_once@
+DUMP-EXCLUDE-FUNCTIONS-NOT: main@
+DUMP-EXCLUDE-FUNCTIONS-DAG: tiny@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FUNCTIONS-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+
+DUMP-EXCLUDE-DATA: # Edges: <referrer> -> <callee> [flags]
+DUMP-EXCLUDE-DATA-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_once@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> helper@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA: # Symbols:
+DUMP-EXCLUDE-DATA-NOT: tiny@
+DUMP-EXCLUDE-DATA-NOT: large@
+DUMP-EXCLUDE-DATA-DAG: helper@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: callee_once@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
