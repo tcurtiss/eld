@@ -1,6 +1,6 @@
 #---CrossReferenceApprox.test------------------ Executable,LS --------------------#
 #BEGIN_COMMENT
-# Tests the CrossReferencePlugin's nearest-preceding-symbol fallback: when a
+# Tests the CrossReference's nearest-preceding-symbol fallback: when a
 # chunk's symbols have no reliable size information (here, hand-written
 # assembly with no .size directives, so every symbol has size 0), a
 # relocation site can never fall inside any symbol's [offset, offset+size)

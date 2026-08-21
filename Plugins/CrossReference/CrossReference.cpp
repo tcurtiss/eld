@@ -1,4 +1,4 @@
-//===- CrossReferencePlugin.cpp-------------------------------------------===//
+//===- CrossReference.cpp-------------------------------------------===//
 // Part of the eld Project, under the BSD License
 // See https://github.com/qualcomm/eld/LICENSE.txt for license information.
 // SPDX-License-Identifier: BSD-3-Clause
@@ -150,9 +150,9 @@ struct SourceLoc {
 
 } // namespace
 
-class CrossReferencePlugin : public LinkerPlugin {
+class CrossReference : public LinkerPlugin {
 public:
-  CrossReferencePlugin() : LinkerPlugin("CrossReferencePlugin") {}
+  CrossReference() : LinkerPlugin("CrossReference") {}
 
   void Init(const std::string &options) override {
     std::istringstream Tokens(options);
@@ -164,7 +164,7 @@ public:
       if (Eq == std::string::npos) {
         HasError = true;
         getLinker()->reportDiag(getLinker()->getErrorDiagID(
-            "CrossReferencePlugin does not recognize option '%0': options "
+            "CrossReference does not recognize option '%0': options "
             "must be in key=value form"),
             Token);
         return;
@@ -175,7 +175,7 @@ public:
         if (!DumpPath.empty()) {
           HasError = true;
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
-              "CrossReferencePlugin was given more than one 'file' option "
+              "CrossReference was given more than one 'file' option "
               "in its Options string: '%0' and '%1'"),
               DumpPath, Value);
           return;
@@ -191,7 +191,7 @@ public:
         } else {
           HasError = true;
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
-              "CrossReferencePlugin does not support format '%0'; only "
+              "CrossReference does not support format '%0'; only "
               "'text' and 'json' are supported"),
               Value);
           return;
@@ -202,7 +202,7 @@ public:
         if (!parseYesNo(Value, ShowGC)) {
           HasError = true;
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
-              "CrossReferencePlugin's show_gc option must be 'yes' or "
+              "CrossReference's show_gc option must be 'yes' or "
               "'no', got '%0'"),
               Value);
           return;
@@ -213,7 +213,7 @@ public:
         if (!parseYesNo(Value, CppDemangle)) {
           HasError = true;
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
-              "CrossReferencePlugin's cpp_demangle option must be 'yes' or "
+              "CrossReference's cpp_demangle option must be 'yes' or "
               "'no', got '%0'"),
               Value);
           return;
@@ -224,7 +224,7 @@ public:
         if (!parseYesNo(Value, UseDWARF)) {
           HasError = true;
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
-              "CrossReferencePlugin's usedwarf option must be 'yes' or "
+              "CrossReference's usedwarf option must be 'yes' or "
               "'no', got '%0'"),
               Value);
           return;
@@ -233,13 +233,13 @@ public:
       }
       HasError = true;
       getLinker()->reportDiag(getLinker()->getErrorDiagID(
-          "CrossReferencePlugin does not recognize option '%0'"), Key);
+          "CrossReference does not recognize option '%0'"), Key);
       return;
     }
     if (DumpPath.empty()) {
       HasError = true;
       getLinker()->reportDiag(getLinker()->getErrorDiagID(
-          "CrossReferencePlugin requires a 'file=<path>' option in its "
+          "CrossReference requires a 'file=<path>' option in its "
           "Options string"));
       return;
     }
@@ -611,7 +611,7 @@ private:
     if (!Out) {
       getLinker()->reportDiag(
           getLinker()->getErrorDiagID(
-              "CrossReferencePlugin could not open dump file '%0' for "
+              "CrossReference could not open dump file '%0' for "
               "writing"),
           DumpPath);
       return;
@@ -636,4 +636,4 @@ private:
   std::vector<Symbol> AllSymbols;
 };
 
-ELD_REGISTER_PLUGIN(CrossReferencePlugin)
+ELD_REGISTER_PLUGIN(CrossReference)

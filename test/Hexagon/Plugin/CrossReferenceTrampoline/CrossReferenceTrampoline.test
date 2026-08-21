@@ -1,6 +1,6 @@
 #---CrossReferenceTrampoline.test--------------- Executable,LS --------------------#
 #BEGIN_COMMENT
-# Tests the CrossReferencePlugin's trampoline collapsing: when a call is
+# Tests the CrossReference's trampoline collapsing: when a call is
 # resolved through a linker-generated branch island/stub (forced here by
 # placing 'bar' far away from 'baz' via a linker script), the plugin should
 # report a single edge directly from the original referrer ('baz') to the

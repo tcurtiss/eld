@@ -1,6 +1,6 @@
 #---CrossReference.test----------------------- Executable,LS --------------------#
 #BEGIN_COMMENT
-# Tests the CrossReferencePlugin example LinkerPlugin, which builds a
+# Tests the CrossReference example LinkerPlugin, which builds a
 # symbol-level caller-to-callee cross-reference table via
 # ActBeforeWritingOutput and getUses()/getAllSymbols(), and dumps it as text.
 #
@@ -44,7 +44,7 @@ RUN: rm -f xref_dump.json
 
 LINK-NOT: Error
 
-FORMAT-ERROR: CrossReferencePlugin does not support format 'binary'; only 'text' and 'json' are supported
+FORMAT-ERROR: CrossReference does not support format 'binary'; only 'text' and 'json' are supported
 FORMAT-ERROR: Fatal: Linking had errors
 
 DUMP-JSON: MAIN_FOO True

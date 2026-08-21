@@ -1,1 +1,1 @@
-add_plugin(CrossReferencePlugin)
+add_plugin(CrossReference)
