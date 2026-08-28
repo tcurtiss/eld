@@ -32,6 +32,7 @@ public:
     UpdateChunks,
     UpdateRule,
     RelocationData,
+    SetSymbolAddress
   };
 
   explicit PluginOp(plugin::LinkerWrapper *, PluginOpType T,
@@ -161,6 +162,26 @@ public:
 
 private:
   const ResolveInfo *RemovedSymbol;
+};
+
+class SetSymbolAddressPluginOp : public PluginOp {
+public:
+  SetSymbolAddressPluginOp(plugin::LinkerWrapper *W, const eld::ResolveInfo *S,
+                           uint64_t Addr);
+
+  static bool classof(const PluginOp *P) {
+    return P->getPluginOpType() == PluginOpType::SetSymbolAddress;
+  }
+
+  std::string getPluginOpStr() const override { return "SA"; }
+
+  const ResolveInfo *getSymbol() const { return Symbol; }
+
+  uint64_t getAddress() const { return Address; }
+
+private:
+  const ResolveInfo *Symbol;
+  uint64_t Address;
 };
 
 class RelocationDataPluginOp : public PluginOp {

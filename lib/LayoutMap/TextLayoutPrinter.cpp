@@ -810,6 +810,10 @@ void TextLayoutPrinter::printFrag(eld::Module &CurModule, ELFSection *Section,
   const LayoutInfo::RemoveSymbolOpsMapT RemovedSymbols =
       ThisLayoutInfo->getRemovedSymbols();
 
+  const LayoutInfo::SetSymbolAddressOpsMapT SetSymbolAddressOps =
+      ThisLayoutInfo->getSetSymbolAddressOps();
+
+
   for (Syms = FragmentInfo->Symbols.begin(); Syms != EndSymbols; ++Syms) {
     // Handle weak symbols.
     std::string ResolvedPath =
@@ -833,6 +837,8 @@ void TextLayoutPrinter::printFrag(eld::Module &CurModule, ELFSection *Section,
 
     auto Removed = RemovedSymbols.find((*Syms)->resolveInfo());
 
+    auto SetAddress = SetSymbolAddressOps.find((*Syms)->resolveInfo());
+
     if (!IsGc) {
       outputStream() << "\t0x";
       outputStream().write_hex(
@@ -847,6 +853,9 @@ void TextLayoutPrinter::printFrag(eld::Module &CurModule, ELFSection *Section,
     if (Removed != RemovedSymbols.end())
       outputStream() << " {" << Removed->getSecond()->getPluginOpStr() << ", "
                      << Removed->getSecond()->getPluginName() << "}";
+    if (SetAddress != SetSymbolAddressOps.end())
+      outputStream() << " {" << SetAddress->getSecond()->getPluginOpStr()
+                     << ", " << SetAddress->getSecond()->getPluginName() << "}";
     if (IsBitcode) {
       outputStream() << "\t"
                      << "#(Bitcode origin:"
