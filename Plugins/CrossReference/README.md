@@ -90,7 +90,11 @@ the target symbol. The source reference is attributed as follows:
 2. Otherwise, the nearest preceding symbol in the same chunk is selected and
    marked approximate. This handles symbols with missing or unreliable size
    information, such as hand-written assembly without `.size` directives.
-3. If no preceding symbol exists, the reference is unattributed.
+3. For a relocation in a non-code section, if no preceding symbol exists but
+   the section has a primary object symbol, that data symbol is used and the
+   reference is marked approximate. This covers data structures such as
+   vtables whose relocation can precede the symbol's recorded range.
+4. If no usable source symbol exists, the reference is unattributed.
 
 Every relocation contributes one reference. Repeated references between the
 same endpoints are aggregated and reported with a count.

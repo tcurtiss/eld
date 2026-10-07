@@ -542,7 +542,7 @@ private:
   }
 
   void buildDashboardSections() {
-    std::unordered_map<Section, Symbol> PrimarySymbols;
+    PrimarySectionSymbols.clear();
     for (Symbol &Sym : AllSymbols) {
       if (!Sym || Sym.isUndef() || Sym.isSection() || Sym.isFile())
         continue;
@@ -552,15 +552,15 @@ private:
       Section S = C.getSection();
       if (!S)
         continue;
-      auto It = PrimarySymbols.find(S);
+      auto It = PrimarySectionSymbols.find(S);
       bool Typed = Sym.isFunction() || Sym.isObject();
-      bool ExistingTyped = It != PrimarySymbols.end() &&
+      bool ExistingTyped = It != PrimarySectionSymbols.end() &&
                            (It->second.isFunction() || It->second.isObject());
-      if (It == PrimarySymbols.end() || (Typed && !ExistingTyped) ||
+      if (It == PrimarySectionSymbols.end() || (Typed && !ExistingTyped) ||
           (Typed == ExistingTyped &&
            Sym.getOffsetInChunk() < It->second.getOffsetInChunk())) {
-        if (It == PrimarySymbols.end()) {
-          PrimarySymbols.emplace(S, Sym);
+        if (It == PrimarySectionSymbols.end()) {
+          PrimarySectionSymbols.emplace(S, Sym);
         } else {
           It->second = Sym;
         }
@@ -583,8 +583,8 @@ private:
         if (DS.Path.empty())
           DS.Path = "(unknown)/unknown";
         DS.Name = S.getName();
-        auto Primary = PrimarySymbols.find(S);
-        if (Primary != PrimarySymbols.end())
+        auto Primary = PrimarySectionSymbols.find(S);
+        if (Primary != PrimarySectionSymbols.end())
           DS.Name = symbolDisplayName(Primary->second);
         DS.Output = S.getOutputSection().getName();
         DS.Size = S.getSize();
@@ -857,13 +857,26 @@ private:
           Symbol ReferrerSym(nullptr);
           AttributionKind Kind =
               findReferrer(Sorted, U.getOffsetInChunk(), ReferrerSym);
+          Section SrcSection = SrcChunk.getSection();
+          if (Kind == AttributionKind::Unattributed && SrcSection &&
+              !SrcSection.isCode()) {
+            auto Primary = PrimarySectionSymbols.find(SrcSection);
+            if (Primary != PrimarySectionSymbols.end() &&
+                Primary->second.isObject()) {
+              // Data sections such as vtables can contain a relocation before
+              // the first symbol covered by the chunk index. Associate those
+              // references with the section's primary data symbol instead of
+              // losing the source entirely.
+              ReferrerSym = Primary->second;
+              Kind = AttributionKind::NearestPreceding;
+            }
+          }
           Edges.push_back({TargetSym, ReferrerSym, Kind, Trampoline});
 
           // The dashboard graph is section-oriented. Keep it independent of
           // symbol filters and show_gc: eliminated sections are deliberately
           // retained as nodes, and repeated relocations are merged into one
           // weighted source-to-target edge.
-          Section SrcSection = SrcChunk.getSection();
           Chunk TargetChunk = TargetSym.getChunk();
           if (!TargetChunk)
             continue;
@@ -1301,6 +1314,7 @@ private:
   std::vector<XRefEdge> Edges;
   std::vector<Symbol> AllSymbols;
   std::vector<DashboardSection> DashboardSections;
+  std::unordered_map<Section, Symbol> PrimarySectionSymbols;
   std::unordered_map<Section, uint32_t> DashboardSectionIds;
   std::map<std::pair<uint32_t, uint32_t>, uint64_t> DashboardEdgeCounts;
 };

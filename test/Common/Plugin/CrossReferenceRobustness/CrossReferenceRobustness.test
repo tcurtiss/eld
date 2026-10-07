@@ -81,13 +81,14 @@ DUMP-DEFAULT-DAG: [[TARGET:[0-9]+]]{{[[:space:]]}}target{{[[:space:]]}}{{.*}}{{[
 DUMP-DEFAULT-DAG: [[REMOTE:[0-9]+]]{{[[:space:]]}}remote{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-DEFAULT-DAG: [[SELF:[0-9]+]]{{[[:space:]]}}self_ref{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-DEFAULT-DAG: [[PTR:[0-9]+]]{{[[:space:]]}}global_ptr{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DEFAULT-DAG: [[GLOBAL:[0-9]+]]{{[[:space:]]}}global_data{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-DEFAULT-DAG: common_data{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-DEFAULT-NOT: local_fn
 DUMP-DEFAULT-NOT: local_data
 DUMP-DEFAULT: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
 DUMP-DEFAULT: [[CALLER]]{{[[:space:]]}}[[TARGET]]{{[[:space:]]}}2{{[[:space:]]}}-
 DUMP-DEFAULT: [[SELF]]{{[[:space:]]}}[[SELF]]{{[[:space:]]}}1{{[[:space:]]}}-
-DUMP-DEFAULT: [[PTR]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DEFAULT: [[PTR]]{{[[:space:]]}}[[GLOBAL]]{{[[:space:]]}}1{{[[:space:]]}}-
 
 DUMP-INCLUDE-EXCLUDE: # Symbols:
 DUMP-INCLUDE-EXCLUDE: caller
