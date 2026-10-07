@@ -35,22 +35,22 @@ LINK-NOT: Error
 GLOB-ERROR: CrossReference could not parse glob pattern '[unterminated'
 GLOB-ERROR: Fatal: Linking had errors
 
-DUMP-EXCLUDE-SYMBOLS: # Edges: <referrer> -> <callee> [flags]
-DUMP-EXCLUDE-SYMBOLS-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-SYMBOLS: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-EXCLUDE-SYMBOLS-DAG: [[SM:[0-9]+]]{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-SYMBOLS-DAG: [[SF:[0-9]+]]{{[[:space:]]}}foo{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-EXCLUDE-SYMBOLS-NOT: bar
 DUMP-EXCLUDE-SYMBOLS-NOT: baz
-DUMP-EXCLUDE-SYMBOLS: # Symbols:
-DUMP-EXCLUDE-SYMBOLS-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-SYMBOLS-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-SYMBOLS: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-EXCLUDE-SYMBOLS: [[SM]]{{[[:space:]]}}[[SF]]{{[[:space:]]}}1{{[[:space:]]}}-
 DUMP-EXCLUDE-SYMBOLS-NOT: bar
 DUMP-EXCLUDE-SYMBOLS-NOT: baz
 
-DUMP-EXCLUDE-FILES: # Edges: <referrer> -> <callee> [flags]
-DUMP-EXCLUDE-FILES-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-FILES-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-EXCLUDE-FILES-DAG: [[FM:[0-9]+]]{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES-DAG: [[FF:[0-9]+]]{{[[:space:]]}}foo{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES-DAG: [[FB:[0-9]+]]{{[[:space:]]}}bar{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-EXCLUDE-FILES-NOT: baz
-DUMP-EXCLUDE-FILES: # Symbols:
-DUMP-EXCLUDE-FILES-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-FILES-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-FILES-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FILES: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-EXCLUDE-FILES: [[FM]]{{[[:space:]]}}[[FF]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-EXCLUDE-FILES: [[FM]]{{[[:space:]]}}[[FB]]{{[[:space:]]}}1{{[[:space:]]}}-
 DUMP-EXCLUDE-FILES-NOT: baz

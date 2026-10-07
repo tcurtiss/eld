@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_dump.txt:exclude_data=yes
+    Options: file=xref_dump.txt:exclude_data=yes:exclude_local=no

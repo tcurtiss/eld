@@ -18,14 +18,14 @@ RUN: rm -f xref_dump.txt
 
 LINK-NOT: Error
 
-DUMP-MANGLED: # Edges: <referrer> -> <callee> [flags]
-DUMP-MANGLED-DAG: _ZN2ns3barEii@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> _ZN2ns3fooEi@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MANGLED: # Symbols:
-DUMP-MANGLED-DAG: _ZN2ns3fooEi@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MANGLED-DAG: _ZN2ns3barEii@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MANGLED: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-MANGLED-DAG: [[MFOO:[0-9]+]]{{[[:space:]]}}_ZN2ns3fooEi{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MANGLED-DAG: [[MBAR:[0-9]+]]{{[[:space:]]}}_ZN2ns3barEii{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MANGLED: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-MANGLED: [[MBAR]]{{[[:space:]]}}[[MFOO]]{{[[:space:]]}}2{{[[:space:]]}}-
 
-DUMP-DEMANGLED: # Edges: <referrer> -> <callee> [flags]
-DUMP-DEMANGLED-DAG: ns::bar(int, int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> ns::foo(int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DEMANGLED: # Symbols:
-DUMP-DEMANGLED-DAG: ns::foo(int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DEMANGLED-DAG: ns::bar(int, int)@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-DEMANGLED: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-DEMANGLED-DAG: [[DFOO:[0-9]+]]{{[[:space:]]}}ns::foo(int){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DEMANGLED-DAG: [[DBAR:[0-9]+]]{{[[:space:]]}}ns::bar(int, int){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DEMANGLED: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-DEMANGLED: [[DBAR]]{{[[:space:]]}}[[DFOO]]{{[[:space:]]}}2{{[[:space:]]}}-

@@ -2,11 +2,15 @@
 #BEGIN_COMMENT
 # Tests the CrossReference example LinkerPlugin, which builds a
 # symbol-level caller-to-callee cross-reference table via
-# ActBeforeWritingOutput and getUses()/getAllSymbols(), and dumps it as text.
+# ActBeforeWritingOutput and getUses()/getAllSymbols(), and dumps it as compact
+# text.
 #
 # Checks that a direct call is attributed exactly to its containing caller
-# symbol (main -> foo, main -> bar), each qualified with origin file, size,
-# and address ("name@file+size@address"). Also checks the show_gc plugin
+# symbols (main -> foo, main -> bar, and the nested deep call/data graph),
+# using a symbol catalog and numeric edge IDs. The nested inputs also exercise
+# const, writable, and BSS data, plus weak function/data definitions both
+# resolved to strong definitions in another nested object and left unoverridden.
+# Also checks the show_gc plugin
 # option: by default (show_gc unset), a function that is unreferenced and
 # eligible for removal by --gc-sections is omitted from the dump entirely,
 # along with its outgoing edges; with show_gc=yes, it still appears in the
@@ -15,67 +19,95 @@
 # indicated solely by an unknown ("?") address, with no separate tag.
 #
 # Also checks the format plugin option: format=text (the default) produces
-# the same dump as when the option is omitted; format=json produces the same
-# caller/callee and symbol data as a JSON object with "edges" and "symbols"
-# arrays instead of the "name@file+size@address" text notation; and an
-# unrecognized format is rejected with an error.
+# the compact catalog format; format=json produces the dashboard object JSON;
+# format=json_columnar produces its columnar JSON. An unrecognized format is
+# rejected with an error.
 #END_COMMENT
 #START_TEST
 RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections
+RUN: mkdir -p %t.deep/Level1/Level2/Level3
+RUN: mkdir -p %t.deep/Level1/Overrides
+RUN: %clang %clangopts -c %p/Inputs/Deep/Level1/Level2/Level3/deep.c -o %t.deep/Level1/Level2/Level3/deep.o -ffunction-sections -fdata-sections
+RUN: %clang %clangopts -c %p/Inputs/Deep/Level1/Overrides/override.c -o %t.deep/Level1/Overrides/override.o -ffunction-sections -fdata-sections
 RUN: rm -f xref_dump.txt
-RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
 RUN: rm -f xref_dump.txt
-RUN: %link %linkopts --gc-sections %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %link %linkopts --gc-sections %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-GC-HIDDEN
 RUN: rm -f xref_dump.txt
-RUN: %link %linkopts --gc-sections %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigShowGC.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %link %linkopts --gc-sections %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigShowGC.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-GC-SHOWN
 RUN: rm -f xref_dump.txt
-RUN: %link %linkopts %t1.1.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigFormatText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigFormatText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
 RUN: rm -f xref_dump.txt
-RUN: %not %link %linkopts %t1.1.o -e main -o %t5.out --plugin-config %p/Inputs/PluginConfigFormatInvalid.yaml 2>&1 | %filecheck %s --check-prefix=FORMAT-ERROR
+RUN: %not %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t5.out --plugin-config %p/Inputs/PluginConfigFormatInvalid.yaml 2>&1 | %filecheck %s --check-prefix=FORMAT-ERROR
 RUN: rm -f xref_dump.json
-RUN: %link %linkopts %t1.1.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigFormatJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_dump.json')); edges = d['edges']; syms = {s['name'] for s in d['symbols']}; print('MAIN_FOO', any(e['referrer'] and e['referrer']['name'] == 'main' and e['target']['name'] == 'foo' for e in edges)); print('MAIN_BAR', any(e['referrer'] and e['referrer']['name'] == 'main' and e['target']['name'] == 'bar' for e in edges)); print('SYMS_OK', {'main', 'foo', 'bar'} <= syms)" | %filecheck %s --check-prefix=DUMP-JSON
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigFormatJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import json; d = json.load(open('xref_dump.json')); print('JSON_OBJECT', bool(d['nodes']), bool(d['edges']), any(n['name'] == 'deep_rw_data' and n['kind'] == 'data' for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-JSON
 RUN: rm -f xref_dump.json
+RUN: rm -f xref_columnar.json
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t9.out --plugin-config %p/Inputs/PluginConfigFormatColumnar.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import json; d = json.load(open('xref_columnar.json')); print('JSON_COLUMNAR', d['format'], d['version'], d['sections']['count'] == len(d['sections']['size']), len(d['refs']['offsets']) == d['sections']['count'] + 1)" | %filecheck %s --check-prefix=DUMP-COLUMNAR
+RUN: rm -f xref_root.json
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t10.out --plugin-config %p/Inputs/PluginConfigSourceRoot.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import json; d = json.load(open('xref_root.json')); print('SOURCE_ROOT', all(not n['path'].startswith('/') for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-SOURCE-ROOT
+RUN: rm -f xref_strip.json
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t11.out --plugin-config %p/Inputs/PluginConfigStripPrefix.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import json; d = json.load(open('xref_strip.json')); print('STRIP_PREFIX', all('/' not in n['path'] for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-STRIP-PREFIX
 #END_TEST
 
 LINK-NOT: Error
 
-FORMAT-ERROR: CrossReference does not support format 'binary'; only 'text' and 'json' are supported
+FORMAT-ERROR: CrossReference does not support format 'binary'; only 'text', 'json', and 'json_columnar' are supported
 FORMAT-ERROR: Fatal: Linking had errors
 
-DUMP-JSON: MAIN_FOO True
-DUMP-JSON: MAIN_BAR True
-DUMP-JSON: SYMS_OK True
+DUMP-JSON: JSON_OBJECT True True True
+DUMP-COLUMNAR: JSON_COLUMNAR fia-columnar 1 True True
+DUMP-SOURCE-ROOT: SOURCE_ROOT True
+DUMP-STRIP-PREFIX: STRIP_PREFIX True
 
-DUMP: # Edges: <referrer> -> <callee> [flags]
-DUMP-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP: # Symbols:
-DUMP-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-DAG: [[MAIN:[0-9]+]]{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[FOO:[0-9]+]]{{[[:space:]]}}foo{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[BAR:[0-9]+]]{{[[:space:]]}}bar{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[DEEP_TOP:[0-9]+]]{{[[:space:]]}}deep_top{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[DEEP_MID:[0-9]+]]{{[[:space:]]}}deep_mid{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[DEEP_LEAF:[0-9]+]]{{[[:space:]]}}deep_leaf{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[DEEP_CONST:[0-9]+]]{{[[:space:]]}}deep_const_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.rodata
+DUMP-DAG: [[DEEP_RW:[0-9]+]]{{[[:space:]]}}deep_rw_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.data
+DUMP-DAG: [[DEEP_BSS:[0-9]+]]{{[[:space:]]}}deep_bss_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}{{[.](bss|sdata)}}
+DUMP-DAG: [[WEAK_FN:[0-9]+]]{{[[:space:]]}}weak_function_symbol{{[[:space:]]}}{{.*}}Level1{{/}}Overrides{{/}}override.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[WEAK_DATA:[0-9]+]]{{[[:space:]]}}weak_data_symbol{{[[:space:]]}}{{.*}}Level1{{/}}Overrides{{/}}override.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.data
+DUMP-DAG: [[WEAK_UNOVERRIDDEN_FN:[0-9]+]]{{[[:space:]]}}weak_unoverridden_function{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
+DUMP-DAG: [[WEAK_UNOVERRIDDEN_DATA:[0-9]+]]{{[[:space:]]}}weak_unoverridden_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.data
+DUMP: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-DAG: [[MAIN]]{{[[:space:]]}}[[FOO]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[MAIN]]{{[[:space:]]}}[[BAR]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[MAIN]]{{[[:space:]]}}[[DEEP_TOP]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_MID]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_LEAF]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_MID]]{{[[:space:]]}}[[DEEP_LEAF]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_CONST]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_RW]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_BSS]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_FN]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_DATA]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_UNOVERRIDDEN_FN]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_UNOVERRIDDEN_DATA]]{{[[:space:]]}}2{{[[:space:]]}}-
 
-DUMP-GC-HIDDEN: # Edges: <referrer> -> <callee> [flags]
-DUMP-GC-HIDDEN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-HIDDEN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-GC-HIDDEN-DAG: {{[0-9]+}}{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN-DAG: {{[0-9]+}}{{[[:space:]]}}foo{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN-DAG: {{[0-9]+}}{{[[:space:]]}}bar{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-GC-HIDDEN: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
 DUMP-GC-HIDDEN-NOT: unused
-DUMP-GC-HIDDEN: # Symbols:
-DUMP-GC-HIDDEN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-HIDDEN-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-HIDDEN-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-HIDDEN-NOT: unused
 
-DUMP-GC-SHOWN: # Edges: <referrer> -> <callee> [flags]
-DUMP-GC-SHOWN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-SHOWN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-SHOWN-DAG: unused@{{.*}}+0x{{[0-9a-f]+}}@? -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-SHOWN: # Symbols:
-DUMP-GC-SHOWN-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-SHOWN-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-SHOWN-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-GC-SHOWN-DAG: unused@{{.*}}+0x{{[0-9a-f]+}}@?
-
+DUMP-GC-SHOWN: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-GC-SHOWN-DAG: {{[0-9]+}}{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: {{[0-9]+}}{{[[:space:]]}}foo{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: {{[0-9]+}}{{[[:space:]]}}bar{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-GC-SHOWN-DAG: {{[0-9]+}}{{[[:space:]]}}unused{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}?
+DUMP-GC-SHOWN: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-GC-SHOWN: {{[0-9]+}}{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}1{{[[:space:]]}}-

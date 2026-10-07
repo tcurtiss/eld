@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_dump.json:format=json:usedwarf=yes
+    Options: file=xref_columnar.json:format=json_columnar

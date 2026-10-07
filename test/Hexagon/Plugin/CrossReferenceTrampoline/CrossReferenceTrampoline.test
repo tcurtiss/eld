@@ -4,8 +4,8 @@
 # resolved through a linker-generated branch island/stub (forced here by
 # placing 'bar' far away from 'baz' via a linker script), the plugin should
 # report a single edge directly from the original referrer ('baz') to the
-# real target symbol ('bar'), tagged "[trampoline]", rather than two hops
-# through the synthetic stub symbol.
+# real target symbol ('bar'), tagged with the "trampoline" flag, rather than
+# two hops through the synthetic stub symbol.
 #END_COMMENT
 #START_TEST
 RUN: %clang %clangopts -o %t1.1.o %p/Inputs/1.c -c -ffunction-sections
@@ -17,11 +17,11 @@ RUN: rm -f xref_trampoline_dump.txt
 
 LINK-NOT: Error
 
-DUMP: # Edges: <referrer> -> <callee> [flags]
-DUMP-DAG: baz@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DAG: baz@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} [trampoline]
+DUMP: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-DAG: [[FOO:[0-9]+]]{{[[:space:]]}}foo{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DAG: [[BAR:[0-9]+]]{{[[:space:]]}}bar{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DAG: [[BAZ:[0-9]+]]{{[[:space:]]}}baz{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-DAG: [[BAZ]]{{[[:space:]]}}[[FOO]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-DAG: [[BAZ]]{{[[:space:]]}}[[BAR]]{{[[:space:]]}}1{{[[:space:]]}}trampoline
 DUMP-NOT: trampoline_for_bar
-DUMP: # Symbols:
-DUMP-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-DAG: baz@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}

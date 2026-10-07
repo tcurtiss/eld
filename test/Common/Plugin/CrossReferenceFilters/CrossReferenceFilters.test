@@ -65,91 +65,83 @@ LINK-NOT: Error
 MIN-SIZE-ERROR: CrossReference's min_size option must be a non-negative integer, got 'abc'
 MIN-SIZE-ERROR: Fatal: Linking had errors
 
-DUMP-INCLUDE-SYMBOLS: # Edges: <referrer> -> <callee> [flags]
-DUMP-INCLUDE-SYMBOLS-NOT: ->
-DUMP-INCLUDE-SYMBOLS: # Symbols:
-DUMP-INCLUDE-SYMBOLS-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-INCLUDE-SYMBOLS-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-INCLUDE-SYMBOLS: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-INCLUDE-SYMBOLS-DAG: caller1{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-INCLUDE-SYMBOLS-DAG: caller2{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-INCLUDE-SYMBOLS-NOT: callee_many
 DUMP-INCLUDE-SYMBOLS-NOT: callee_once
 DUMP-INCLUDE-SYMBOLS-NOT: helper
 DUMP-INCLUDE-SYMBOLS-NOT: main@
+DUMP-INCLUDE-SYMBOLS: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-INCLUDE-SYMBOLS-NOT: ->
 
-DUMP-EXCLUDE-LOCAL: # Edges: <referrer> -> <callee> [flags]
+DUMP-EXCLUDE-LOCAL: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
 DUMP-EXCLUDE-LOCAL-NOT: $
-DUMP-EXCLUDE-LOCAL-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-LOCAL-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-LOCAL: # Symbols:
-DUMP-EXCLUDE-LOCAL-NOT: $
-DUMP-EXCLUDE-LOCAL-DAG: callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-LOCAL-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-LOCAL-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-LOCAL-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-LOCAL-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: [[LC:[0-9]+]]{{[[:space:]]}}callee_many{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: [[C1:[0-9]+]]{{[[:space:]]}}caller1{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: [[C2:[0-9]+]]{{[[:space:]]}}caller2{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: [[LM:[0-9]+]]{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-LOCAL-DAG: [[LL:[0-9]+]]{{[[:space:]]}}large{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-EXCLUDE-LOCAL-NOT: helper@{{.*}}
 DUMP-EXCLUDE-LOCAL-NOT: tiny@{{.*}}
+DUMP-EXCLUDE-LOCAL: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-EXCLUDE-LOCAL-DAG: [[C1]]{{[[:space:]]}}[[LC]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-
+DUMP-EXCLUDE-LOCAL-DAG: [[LM]]{{[[:space:]]}}[[C1]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-
 
-DUMP-MIN-SIZE: # Edges: <referrer> -> <callee> [flags]
-DUMP-MIN-SIZE-NOT: callee_many
-DUMP-MIN-SIZE-NOT: callee_once
-DUMP-MIN-SIZE: # Symbols:
-DUMP-MIN-SIZE-DAG: helper@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MIN-SIZE-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MIN-SIZE-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MIN-SIZE-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MIN-SIZE-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-MIN-SIZE-DAG: caller2{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE-DAG: main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MIN-SIZE-DAG: large{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-MIN-SIZE-NOT: callee_many
 DUMP-MIN-SIZE-NOT: callee_once
 DUMP-MIN-SIZE-NOT: tiny@
+DUMP-MIN-SIZE: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
 
-DUMP-MIN-REFS: # Edges: <referrer> -> <callee> [flags]
-DUMP-MIN-REFS: # Symbols:
-DUMP-MIN-REFS-DAG: callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MIN-REFS-DAG: tiny@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-MIN-REFS-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-MIN-REFS: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-MIN-REFS-DAG: callee_many{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MIN-REFS-DAG: tiny{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MIN-REFS-DAG: large{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-MIN-REFS-NOT: callee_once
 DUMP-MIN-REFS-NOT: caller1
 DUMP-MIN-REFS-NOT: caller2
 DUMP-MIN-REFS-NOT: main@
 DUMP-MIN-REFS-NOT: helper@
+DUMP-MIN-REFS: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-MIN-REFS-NOT: ->
 
-DUMP-EXCLUDE-INTRA-FILE: # Edges: <referrer> -> <callee> [flags]
-DUMP-EXCLUDE-INTRA-FILE-DAG: calls_remote@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> b_fn@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-INTRA-FILE-NOT: calls_local@{{.*}} -> local_fn
-DUMP-EXCLUDE-INTRA-FILE-NOT: main@{{.*}} -> calls_local
-DUMP-EXCLUDE-INTRA-FILE-NOT: main@{{.*}} -> calls_remote
-DUMP-EXCLUDE-INTRA-FILE: # Symbols:
-DUMP-EXCLUDE-INTRA-FILE-DAG: local_fn@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-INTRA-FILE-DAG: calls_local@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-INTRA-FILE-DAG: calls_remote@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-INTRA-FILE-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-INTRA-FILE-DAG: b_fn@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-EXCLUDE-INTRA-FILE-DAG: [[IL:[0-9]+]]{{[[:space:]]}}local_fn{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: calls_local{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: [[IR:[0-9]+]]{{[[:space:]]}}calls_remote{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE-DAG: [[IB:[0-9]+]]{{[[:space:]]}}b_fn{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-INTRA-FILE: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-EXCLUDE-INTRA-FILE: [[IR]]{{[[:space:]]}}[[IB]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-
 
-DUMP-EXCLUDE-FUNCTIONS: # Edges: <referrer> -> <callee> [flags]
-DUMP-EXCLUDE-FUNCTIONS-NOT: ->
-DUMP-EXCLUDE-FUNCTIONS: # Symbols:
+DUMP-EXCLUDE-FUNCTIONS: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
 DUMP-EXCLUDE-FUNCTIONS-NOT: helper@
 DUMP-EXCLUDE-FUNCTIONS-NOT: caller1@
 DUMP-EXCLUDE-FUNCTIONS-NOT: caller2@
 DUMP-EXCLUDE-FUNCTIONS-NOT: callee_many@
 DUMP-EXCLUDE-FUNCTIONS-NOT: callee_once@
 DUMP-EXCLUDE-FUNCTIONS-NOT: main@
-DUMP-EXCLUDE-FUNCTIONS-DAG: tiny@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-FUNCTIONS-DAG: large@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FUNCTIONS-DAG: tiny{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FUNCTIONS-DAG: large{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-FUNCTIONS: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-EXCLUDE-FUNCTIONS-NOT: ->
 
-DUMP-EXCLUDE-DATA: # Edges: <referrer> -> <callee> [flags]
-DUMP-EXCLUDE-DATA-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> callee_once@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> helper@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}} -> caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA: # Symbols:
+DUMP-EXCLUDE-DATA: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
 DUMP-EXCLUDE-DATA-NOT: tiny@
 DUMP-EXCLUDE-DATA-NOT: large@
-DUMP-EXCLUDE-DATA-DAG: helper@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: callee_many@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: callee_once@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: caller1@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: caller2@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-EXCLUDE-DATA-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: [[DH:[0-9]+]]{{[[:space:]]}}helper{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: [[DCM:[0-9]+]]{{[[:space:]]}}callee_many{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: [[DCO:[0-9]+]]{{[[:space:]]}}callee_once{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: [[D1:[0-9]+]]{{[[:space:]]}}caller1{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: [[D2:[0-9]+]]{{[[:space:]]}}caller2{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA-DAG: [[DM:[0-9]+]]{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-EXCLUDE-DATA: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-EXCLUDE-DATA-DAG: [[D1]]{{[[:space:]]}}[[DCM]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-
+DUMP-EXCLUDE-DATA-DAG: [[D2]]{{[[:space:]]}}[[DCM]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-
+DUMP-EXCLUDE-DATA-DAG: [[D2]]{{[[:space:]]}}[[DCO]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-
+DUMP-EXCLUDE-DATA-DAG: [[DM]]{{[[:space:]]}}[[D1]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-
+DUMP-EXCLUDE-DATA-DAG: [[DM]]{{[[:space:]]}}[[D2]]{{[[:space:]]}}{{[0-9]+}}{{[[:space:]]}}-

@@ -1,0 +1,5 @@
+GlobalPlugins:
+  - Type: LinkerPlugin
+    Name: CrossReference
+    Library: CrossReference
+    Options: file=xref_robust_columnar.json:format=json_columnar:show_gc=no:exclude_symbols=unused:exclude_local=yes

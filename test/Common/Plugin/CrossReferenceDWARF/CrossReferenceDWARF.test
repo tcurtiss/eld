@@ -3,8 +3,8 @@
 # Tests the CrossReference's usedwarf option: with usedwarf=yes, each
 # symbol in the dump is additionally qualified with its declaring source
 # file and line number, as recovered from DWARF debug info (in text format,
-# appended as "@srcfile:line"; in JSON format, as "sourceFile"/"sourceLine"
-# fields). By default (usedwarf unset), no such information is looked up or
+# appended to the symbol name as "(source-file:line)"). By default (usedwarf unset),
+# no such information is looked up or
 # printed, exactly as before this option existed.
 #
 # The input is compiled with "-gdwarf-2 -mllvm -dwarf-inlined-strings=Enable"
@@ -18,7 +18,7 @@
 # avoids this and lets the test exercise correct DWARF lookup.
 #END_COMMENT
 #START_TEST
-RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections -gdwarf-2 -mllvm -dwarf-inlined-strings=Enable
+RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections -fdata-sections -gdwarf-2 -mllvm -dwarf-inlined-strings=Enable
 RUN: rm -f xref_dump.txt
 RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-NODWARF
@@ -26,27 +26,29 @@ RUN: rm -f xref_dump.txt
 RUN: %link %linkopts %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigUseDWARF.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-DWARF
 RUN: rm -f xref_dump.txt
-RUN: rm -f xref_dump.json
-RUN: %link %linkopts %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigUseDWARFJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_dump.json')); syms = {s['name']: s for s in d['symbols']}; print('MAIN_LOC', syms['main'].get('sourceFile', '').endswith('1.c') and syms['main'].get('sourceLine') == 3); print('FOO_LOC', syms['foo'].get('sourceFile', '').endswith('1.c') and syms['foo'].get('sourceLine') == 1); print('BAR_LOC', syms['bar'].get('sourceFile', '').endswith('1.c') and syms['bar'].get('sourceLine') == 2)" | %filecheck %s --check-prefix=DUMP-DWARF-JSON
-RUN: rm -f xref_dump.json
+RUN: %link %linkopts %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigUseDWARFSourceRoot.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-DWARF-ROOT
+RUN: rm -f xref_dump.txt
 #END_TEST
 
 LINK-NOT: Error
 
-DUMP-DWARF-JSON: MAIN_LOC True
-DUMP-DWARF-JSON: FOO_LOC True
-DUMP-DWARF-JSON: BAR_LOC True
-
-DUMP-NODWARF: # Edges: <referrer> -> <callee> [flags]
-DUMP-NODWARF: # Symbols:
-DUMP-NODWARF-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-NODWARF-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
-DUMP-NODWARF-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}
+DUMP-NODWARF: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-NODWARF-DAG: foo{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-NODWARF-DAG: bar{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-NODWARF-DAG: main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-NODWARF-DAG: global_data{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-NODWARF-NOT: 1.c
+DUMP-NODWARF: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
 
-DUMP-DWARF: # Edges: <referrer> -> <callee> [flags]
-DUMP-DWARF: # Symbols:
-DUMP-DWARF-DAG: foo@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}@{{.*}}1.c:1
-DUMP-DWARF-DAG: bar@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}@{{.*}}1.c:2
-DUMP-DWARF-DAG: main@{{.*}}+0x{{[0-9a-f]+}}@0x{{[0-9a-f]+}}@{{.*}}1.c:3
+DUMP-DWARF: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-DWARF: #   with usedwarf=yes, source appears after the name as (file:line).
+DUMP-DWARF-DAG: foo ({{.*}}1.c:2){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DWARF-DAG: bar ({{.*}}1.c:3){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DWARF-DAG: main ({{.*}}1.c:4){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DWARF-DAG: global_data ({{.*}}1.c:1){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DWARF: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+
+DUMP-DWARF-ROOT: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-DWARF-ROOT-DAG: foo ({{.*}}1.c:2){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DWARF-ROOT-NOT: (/

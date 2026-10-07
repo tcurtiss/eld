@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 //
 // Builds a symbol-level caller-to-callee cross-reference table and writes it
-// to a dump file, as either plain text (the default) or JSON. Unlike the
+// to a dump file, as either compact text (the default) or JSON. Unlike the
 // linker's built-in --cref table (which records, per symbol, only the
 // *input files* that reference it), this plugin records the specific
 // *referring symbol* for each reference, when it can be determined.
@@ -13,8 +13,8 @@
 // Local symbols are not unique by name (e.g. a static helper named "helper"
 // may be defined identically in several translation units), so every symbol
 // printed in the dump is qualified with its origin file, size, and virtual
-// address, as "name@file+size@address" (all in hex, e.g.
-// "helper@a.c.o+0x10@0x2000"). A garbage-collected symbol never reaches
+// address, as tab-delimited fields: "name\tfile\t0xsize\taddress" (e.g.
+// "helper\ta.c.o\t0x10\t0x2000"). A garbage-collected symbol never reaches
 // final layout and so has no address; its address field is printed as "?",
 // which doubles as the dump's sole indicator of GC'd status (no separate
 // tag is needed).
@@ -40,18 +40,18 @@
 //     symbol's [offset, offset + size) range, the reference is attributed
 //     to that symbol exactly.
 //   - Otherwise, the nearest preceding symbol (by offset) in the same chunk
-//     is used as a best-effort guess, and the edge is marked "(approx)" in
-//     the dump. This fallback matters for chunks whose symbols have no
-//     reliable size information (e.g. hand-written assembly without .size
-//     directives).
+//     is used as a best-effort guess, and the edge gets an "approx" flag in
+//     text output (or "referrerKind": "approx" in JSON). This fallback
+//     matters for chunks whose symbols have no reliable size information
+//     (e.g. hand-written assembly without .size directives).
 //   - If no symbol precedes the relocation's offset in its chunk at all,
-//     the referrer is recorded as "<unattributed>".
+//     the referrer is recorded as an unattributed edge.
 //
 // If the reference was resolved through a linker-generated trampoline (a
 // branch island / stub, e.g. for an out-of-range branch), the edge is
 // collapsed to point directly from the original referrer to the real
-// target symbol, and is tagged "[trampoline]" rather than being reported
-// as two separate hops through the synthetic stub symbol.
+// target symbol, and is tagged with a "trampoline" flag rather than being
+// reported as two separate hops through the synthetic stub symbol.
 //
 // LTO/bitcode input files are not inspected by this initial implementation.
 //
@@ -65,18 +65,20 @@
 // "file" key is required and gives the path of the file to write the
 // cross-reference table to. The remaining keys are optional:
 //   file=<path>          -- path of the dump file to write (required).
-//   format=text|json     -- output format for the dump (default: text).
-//                            "text" produces the human-readable
-//                            "name@file+size@address" table described above;
-//                            "json" produces a machine-readable object with
-//                            "edges" and "symbols" arrays, where each symbol
-//                            is {"name", "file", "size", "address"} (address
-//                            is JSON null for a garbage-collected symbol,
-//                            the JSON analog of the text format's "?"), and
-//                            each edge is {"referrer", "referrerKind",
-//                            "target", "trampoline"} ("referrer" is null
-//                            when unattributed; "referrerKind" is one of
-//                            "exact", "approx", "unattributed").
+//   format=text|json|json_columnar
+//                          -- output format for the dump (default: text).
+//                            "text" produces a compact symbol catalog and
+//                            numeric edge table. "json" produces the
+//                            section-oriented object format consumed by
+//                            image_analysis. "json_columnar" produces its
+//                            compressed columnar format.
+//   source_root=<path>    -- remove this path prefix from source paths in all
+//                            output formats. The prefix is removed only when
+//                            it is a complete path component.
+//   strip_prefix=<glob>   -- remove the longest complete path prefix matched
+//                            by this wildcard pattern. Unlike source_root,
+//                            this supports *, ?, bracket classes and brace
+//                            expansions. The two options are exclusive.
 //   show_gc=yes|no       -- whether to include garbage-collected
 //                            symbols/edges in the dump (default: no).
 //   cpp_demangle=yes|no  -- whether to print C++ symbol names demangled
@@ -87,11 +89,12 @@
 //                            source file and line number from DWARF debug
 //                            info (default: no; requires the input file to
 //                            have been compiled with debug info, e.g. -g).
-//                            When available, this is appended to a text-
-//                            format symbol as "@srcfile:line", and added to
-//                            a JSON-format symbol as "sourceFile"/
+//                            When available, this is appended to the symbol
+//                            name as "(source-file:line)" in a text-format
+//                            symbol, and added to a JSON-format symbol as
+//                            "sourceFile"/
 //                            "sourceLine" fields; when unavailable (no debug
-//                            info, or no matching subprogram DIE), it is
+//                            info, or no matching subprogram/variable DIE), it is
 //                            simply omitted.
 //
 //                            Caveat: this reads DWARF directly from each
@@ -134,7 +137,7 @@
 //                            e.g. static functions/data, and compiler- or
 //                            assembler-generated labels such as ".L0" or
 //                            "$d" -- from the dump, along with any edge they
-//                            would otherwise appear in (default: no).
+//                            would otherwise appear in (default: yes).
 //   exclude_functions=yes|no -- whether to omit function (STT_FUNC) symbols
 //                            from the dump, along with any edge they would
 //                            otherwise appear in (default: no).
@@ -174,8 +177,11 @@
 #include <cstdlib>
 #include <deque>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -186,7 +192,7 @@ namespace {
 
 enum class AttributionKind : uint8_t { Exact, NearestPreceding, Unattributed };
 
-enum class OutputFormat : uint8_t { Text, JSON };
+enum class OutputFormat : uint8_t { Text, DashboardObject, DashboardColumnar };
 
 // A symbol together with its offset and size within the chunk that defines
 // it, used to build a per-chunk, offset-sorted index for referrer lookup.
@@ -197,10 +203,21 @@ struct SymbolOffset {
 };
 
 // A symbol's DWARF-derived declaration site, as looked up by name from the
-// subprogram DIEs of its defining input file's compile units.
+// subprogram or variable DIEs of its defining input file's compile units.
 struct SourceLoc {
   std::string File;
   uint64_t Line;
+};
+
+struct DashboardSection {
+  Section Handle;
+  std::string Path;
+  std::string Name;
+  std::string Output;
+  uint64_t Size = 0;
+  uint8_t Kind = 0;
+  bool Live = true;
+  bool Root = false;
 };
 
 } // namespace
@@ -242,15 +259,53 @@ public:
         if (Value == "text") {
           Format = OutputFormat::Text;
         } else if (Value == "json") {
-          Format = OutputFormat::JSON;
+          Format = OutputFormat::DashboardObject;
+        } else if (Value == "json_columnar") {
+          Format = OutputFormat::DashboardColumnar;
         } else {
           HasError = true;
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
               "CrossReference does not support format '%0'; only "
-              "'text' and 'json' are supported"),
+              "'text', 'json', and 'json_columnar' are supported"),
               Value);
           return;
         }
+        continue;
+      }
+      if (Key == "source_root") {
+        if (HasStripPrefix) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference options 'source_root' and 'strip_prefix' "
+              "are mutually exclusive"));
+          return;
+        }
+        SourceRoot = Value;
+        HasSourceRoot = true;
+        continue;
+      }
+      if (Key == "strip_prefix") {
+        if (HasSourceRoot) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference options 'source_root' and 'strip_prefix' "
+              "are mutually exclusive"));
+          return;
+        }
+        const std::string &Stored = GlobStorage.emplace_back(Value);
+        llvm::Expected<llvm::GlobPattern> ExpPattern =
+            llvm::GlobPattern::create(Stored);
+        if (!ExpPattern) {
+          HasError = true;
+          getLinker()->reportDiag(
+              getLinker()->getErrorDiagID(
+                  "CrossReference could not parse strip_prefix glob "
+                  "pattern '%0': %1"),
+              Stored, llvm::toString(ExpPattern.takeError()));
+          return;
+        }
+        StripPrefixPattern = std::move(ExpPattern.get());
+        HasStripPrefix = true;
         continue;
       }
       if (Key == "show_gc") {
@@ -386,6 +441,7 @@ public:
       return;
     buildStubMap();
     collectAllSymbols();
+    buildDashboardSections();
     buildChunkSymbolIndex();
     walkReferences();
     computeIncomingRefCounts();
@@ -403,6 +459,145 @@ private:
     AttributionKind Kind;
     bool Trampoline;
   };
+
+  static std::string normalizeSeparators(std::string Path) {
+    std::replace(Path.begin(), Path.end(), '\\', '/');
+    return Path;
+  }
+
+  std::string outputPath(const std::string &RawPath) const {
+    std::string Path = normalizeSeparators(RawPath);
+    std::string Root = normalizeSeparators(SourceRoot);
+    while (Root.size() > 1 && Root.back() == '/')
+      Root.pop_back();
+    while (Path.size() > 1 && Path.back() == '/')
+      Path.pop_back();
+    if (Root.empty() && !HasStripPrefix)
+      return Path;
+    if (Root == "/") {
+      if (!Path.empty() && Path.front() == '/')
+        return Path.substr(1);
+      return Path;
+    }
+    if (!Root.empty() && Path == Root)
+      return "";
+    if (!Root.empty() && Path.size() > Root.size() &&
+        Path.compare(0, Root.size(), Root) == 0 &&
+        Path[Root.size()] == '/')
+      return Path.substr(Root.size() + 1);
+    if (StripPrefixPattern) {
+      // GlobPattern reports only whether a complete string matches. Try each
+      // possible path prefix and retain the longest complete path-component
+      // match so wildcard directories can be removed while the suffix is
+      // preserved.
+      size_t MatchLength = 0;
+      for (size_t Length = 1; Length <= Path.size(); ++Length) {
+        bool Boundary = Length == Path.size() || Path[Length] == '/' ||
+                        Path[Length - 1] == '/';
+        if (!Boundary)
+          continue;
+        llvm::StringRef Candidate(Path.data(), Length);
+        if (!StripPrefixPattern->match(Candidate))
+          continue;
+        MatchLength = Length;
+      }
+      if (MatchLength != 0) {
+        while (MatchLength < Path.size() && Path[MatchLength] == '/')
+          ++MatchLength;
+        return Path.substr(MatchLength);
+      }
+    }
+    return Path;
+  }
+
+  static uint8_t dashboardKind(const Section &S) {
+    if (S.isCode())
+      return 0; // code
+    if (S.isNoBits())
+      return 3; // bss
+    if (S.isWritable())
+      return 2; // initialized data
+    return 1; // read-only data
+  }
+
+  std::string symbolDisplayName(const Symbol &Sym) const {
+    std::string Name = Sym.getName();
+    if (CppDemangle)
+      Name = llvm::demangle(Name);
+    return Name;
+  }
+
+  static std::string outputSectionName(const Symbol &Sym) {
+    Chunk C = Sym.getChunk();
+    if (!C)
+      return "<unknown>";
+    Section S = C.getSection();
+    if (!S)
+      return "<unknown>";
+    OutputSection O = S.getOutputSection();
+    if (!O)
+      return "<unknown>";
+    std::string Name = O.getName();
+    return Name.empty() ? "<unknown>" : Name;
+  }
+
+  void buildDashboardSections() {
+    std::unordered_map<Section, Symbol> PrimarySymbols;
+    for (Symbol &Sym : AllSymbols) {
+      if (!Sym || Sym.isUndef() || Sym.isSection() || Sym.isFile())
+        continue;
+      Chunk C = Sym.getChunk();
+      if (!C)
+        continue;
+      Section S = C.getSection();
+      if (!S)
+        continue;
+      auto It = PrimarySymbols.find(S);
+      bool Typed = Sym.isFunction() || Sym.isObject();
+      bool ExistingTyped = It != PrimarySymbols.end() &&
+                           (It->second.isFunction() || It->second.isObject());
+      if (It == PrimarySymbols.end() || (Typed && !ExistingTyped) ||
+          (Typed == ExistingTyped &&
+           Sym.getOffsetInChunk() < It->second.getOffsetInChunk())) {
+        if (It == PrimarySymbols.end()) {
+          PrimarySymbols.emplace(S, Sym);
+        } else {
+          It->second = Sym;
+        }
+      }
+    }
+
+    for (InputFile &IF : getLinker()->getInputFiles()) {
+      if (!IF.hasInputFile() || IF.isBitcode())
+        continue;
+      for (Section &S : IF.getSections()) {
+        // The dashboard models image input sections. Non-allocatable ELF
+        // sections (debug, symbol and relocation tables) are not image nodes.
+        if (!S.isELFSection() || !S.isAlloc() || S.isNull() ||
+            S.isDiscarded())
+          continue;
+
+        DashboardSection DS;
+        DS.Handle = S;
+        DS.Path = outputPath(IF.decoratedPath());
+        if (DS.Path.empty())
+          DS.Path = "(unknown)/unknown";
+        DS.Name = S.getName();
+        auto Primary = PrimarySymbols.find(S);
+        if (Primary != PrimarySymbols.end())
+          DS.Name = symbolDisplayName(Primary->second);
+        DS.Output = S.getOutputSection().getName();
+        DS.Size = S.getSize();
+        DS.Kind = dashboardKind(S);
+        DS.Live = !S.isGarbageCollected();
+        DS.Root = DS.Live && S.getLinkerScriptRule().isKeep();
+
+        uint32_t ID = DashboardSections.size();
+        DashboardSectionIds.emplace(S, ID);
+        DashboardSections.push_back(std::move(DS));
+      }
+    }
+  }
 
   static bool parseYesNo(const std::string &Value, bool &Out) {
     if (Value == "yes") {
@@ -485,7 +680,7 @@ private:
           return true;
     }
     if (!ExcludeFilePatterns.empty()) {
-      std::string File = Sym.getResolvedPath();
+      std::string File = outputPath(Sym.getResolvedPath());
       for (const llvm::GlobPattern &Pattern : ExcludeFilePatterns)
         if (Pattern.match(File))
           return true;
@@ -525,7 +720,8 @@ private:
   bool isIntraFileExcluded(const XRefEdge &E) const {
     if (!ExcludeIntraFile || !E.Referrer)
       return false;
-    return E.Referrer.getResolvedPath() == E.Target.getResolvedPath();
+    return outputPath(E.Referrer.getResolvedPath()) ==
+           outputPath(E.Target.getResolvedPath());
   }
 
   // Populates IncomingRefCount (symbol -> number of edges targeting it)
@@ -662,6 +858,21 @@ private:
           AttributionKind Kind =
               findReferrer(Sorted, U.getOffsetInChunk(), ReferrerSym);
           Edges.push_back({TargetSym, ReferrerSym, Kind, Trampoline});
+
+          // The dashboard graph is section-oriented. Keep it independent of
+          // symbol filters and show_gc: eliminated sections are deliberately
+          // retained as nodes, and repeated relocations are merged into one
+          // weighted source-to-target edge.
+          Section SrcSection = SrcChunk.getSection();
+          Chunk TargetChunk = TargetSym.getChunk();
+          if (!TargetChunk)
+            continue;
+          Section DstSection = TargetChunk.getSection();
+          auto SrcIt = DashboardSectionIds.find(SrcSection);
+          auto DstIt = DashboardSectionIds.find(DstSection);
+          if (SrcIt != DashboardSectionIds.end() &&
+              DstIt != DashboardSectionIds.end() && SrcIt->second != DstIt->second)
+            ++DashboardEdgeCounts[{SrcIt->second, DstIt->second}];
         }
       }
     }
@@ -688,21 +899,21 @@ private:
   // Populates SymbolSourceLoc (symbol -> declaring source file + line) from
   // DWARF debug info, when usedwarf=yes. For each input file that defines at
   // least one collected symbol, this parses its DWARF (if present) once and
-  // indexes every subprogram DIE by name; each of that file's symbols is
-  // then looked up by name in that index. Symbols with no debug info, or
+  // indexes every subprogram and variable DIE by name; each of that file's
+  // symbols is then looked up by name in that index. Symbols with no debug info, or
   // whose input file has none, simply have no entry and are reported without
   // source location, same as before this option existed.
   void buildDWARFIndex() {
     std::unordered_map<InputFile, std::unordered_map<std::string, SourceLoc>>
-        PerFileSubprograms;
+        PerFileNamedDIEs;
     for (Symbol &Sym : AllSymbols) {
       InputFile IF = Sym.getInputFile();
       if (!IF)
         continue;
-      auto FileIt = PerFileSubprograms.find(IF);
-      if (FileIt == PerFileSubprograms.end())
-        FileIt = PerFileSubprograms
-                     .emplace(IF, indexSubprogramsByName(IF))
+      auto FileIt = PerFileNamedDIEs.find(IF);
+      if (FileIt == PerFileNamedDIEs.end())
+        FileIt = PerFileNamedDIEs
+                     .emplace(IF, indexNamedDIEsByName(IF))
                      .first;
       auto NameIt = FileIt->second.find(Sym.getName());
       if (NameIt != FileIt->second.end())
@@ -711,11 +922,11 @@ private:
   }
 
   // Parses IF's DWARF debug info (if any) and returns a map from each
-  // subprogram DIE's name to its declaring source file + line, across every
-  // compile unit in the file. Returns an empty map if IF has no DWARF
-  // context (e.g. it was not compiled with debug info).
+  // subprogram or variable DIE's name to its declaring source file + line,
+  // across every compile unit in the file. Returns an empty map if IF has no
+  // DWARF context (e.g. it was not compiled with debug info).
   std::unordered_map<std::string, SourceLoc>
-  indexSubprogramsByName(InputFile &IF) {
+  indexNamedDIEsByName(InputFile &IF) {
     std::unordered_map<std::string, SourceLoc> Index;
     eld::Expected<DWARFInfo> ExpDI =
         getLinker()->getDWARFInfoForInputFile(IF, getLinker()->is32Bits());
@@ -728,7 +939,7 @@ private:
       return Index;
     for (DWARFUnit &DU : DI.getDWARFUnits()) {
       for (DWARFDie &Die : DU.getDIEs()) {
-        if (!Die.isSubprogramDIE())
+        if (!Die.isSubprogramDIE() && !Die.isVariable())
           continue;
         std::string Name = Die.getName();
         if (Name.empty())
@@ -743,92 +954,62 @@ private:
   // (e.g. a static helper named "helper" defined in both a.c and b.c), so a
   // bare symbol name is not always unique enough to identify which
   // definition is meant. Every symbol name in the dump is therefore
-  // qualified with its origin file, size, and virtual address, in the form
-  // "name@file+size@address". A symbol that was garbage collected never
-  // reaches final layout, so it has no meaningful address; its address
-  // field is reported as "?" instead.
+  // qualified with its origin file, size, and virtual address, as
+  // tab-delimited fields: "name\tfile\t0xsize\taddress". When DWARF
+  // source information is available, it is appended to the name as
+  // "name (source-file:line)". A symbol that was garbage collected never
+  // reaches final layout, so it has no meaningful address; its address field
+  // is reported as "?" instead.
   std::string qualifySymbol(const Symbol &Sym) const {
     std::ostringstream OS;
     std::string Name = Sym.getName();
     if (CppDemangle)
       Name = llvm::demangle(Name);
-    OS << Name << "@" << Sym.getResolvedPath() << "+0x" << std::hex
-       << Sym.getSize() << "@";
+    OS << Name;
+    if (UseDWARF) {
+      auto It = SymbolSourceLoc.find(Sym);
+      if (It != SymbolSourceLoc.end())
+        OS << " (" << outputPath(It->second.File) << ":" << std::dec
+           << It->second.Line << ")";
+    }
+    OS << "\t" << outputPath(Sym.getResolvedPath()) << "\t0x" << std::hex
+       << Sym.getSize() << "\t";
     if (Sym.isGarbageCollected())
       OS << "?";
     else
       OS << "0x" << std::hex << Sym.getAddress();
-    if (UseDWARF) {
-      auto It = SymbolSourceLoc.find(Sym);
-      if (It != SymbolSourceLoc.end())
-        OS << "@" << It->second.File << ":" << std::dec << It->second.Line;
-    }
     return OS.str();
   }
 
-  std::string referrerToString(const Symbol &Referrer,
-                                AttributionKind Kind) const {
-    if (Kind == AttributionKind::Unattributed || !Referrer)
-      return "<unattributed>";
-    std::string S = qualifySymbol(Referrer);
-    if (Kind == AttributionKind::NearestPreceding)
-      S += " (approx)";
-    return S;
-  }
-
-  // JSON counterpart of qualifySymbol(): the same four facts (name, origin
-  // file, size, address), as object fields rather than a single delimited
-  // string, so consumers don't need to re-parse "name@file+size@address".
-  // "address" is JSON null for a garbage-collected symbol -- the JSON
-  // analog of the text format's "?" -- since such a symbol never reached
-  // final layout and so has no meaningful address to report.
-  llvm::json::Object symbolToJSON(const Symbol &Sym) const {
-    std::string Name = Sym.getName();
-    if (CppDemangle)
-      Name = llvm::demangle(Name);
-    llvm::json::Object Obj{{"name", Name},
-                            {"file", Sym.getResolvedPath()},
-                            {"size", Sym.getSize()}};
-    if (Sym.isGarbageCollected())
-      Obj["address"] = nullptr;
-    else
-      Obj["address"] = Sym.getAddress();
-    if (UseDWARF) {
-      auto It = SymbolSourceLoc.find(Sym);
-      if (It != SymbolSourceLoc.end()) {
-        Obj["sourceFile"] = It->second.File;
-        Obj["sourceLine"] = It->second.Line;
+  void writeTextDump(std::ofstream &Out) {
+    std::unordered_map<Symbol, uint32_t> SymbolIDs;
+    std::vector<Symbol> PrintedSymbols;
+    for (Symbol &Sym : AllSymbols) {
+      if (!ShowGC && Sym.isGarbageCollected())
+        continue;
+      if (isExcluded(Sym))
+        continue;
+      if (SymbolIDs.find(Sym) == SymbolIDs.end()) {
+        uint32_t ID = PrintedSymbols.size();
+        SymbolIDs.emplace(Sym, ID);
+        PrintedSymbols.push_back(Sym);
       }
     }
-    return Obj;
-  }
 
-  static llvm::StringRef attributionKindToString(AttributionKind Kind) {
-    switch (Kind) {
-    case AttributionKind::Exact:
-      return "exact";
-    case AttributionKind::NearestPreceding:
-      return "approx";
-    case AttributionKind::Unattributed:
-      return "unattributed";
-    }
-    llvm_unreachable("Unexpected AttributionKind!");
-  }
-
-  llvm::json::Object edgeToJSON(const XRefEdge &E) const {
-    llvm::json::Object Obj;
-    if (E.Kind == AttributionKind::Unattributed || !E.Referrer)
-      Obj["referrer"] = nullptr;
-    else
-      Obj["referrer"] = symbolToJSON(E.Referrer);
-    Obj["referrerKind"] = attributionKindToString(E.Kind);
-    Obj["target"] = symbolToJSON(E.Target);
-    Obj["trampoline"] = E.Trampoline;
-    return Obj;
-  }
-
-  void writeTextDump(std::ofstream &Out) {
-    Out << "# Edges: <referrer> -> <callee> [flags]\n";
+    struct TextEdgeKey {
+      int64_t Source;
+      uint32_t Target;
+      bool operator<(const TextEdgeKey &Other) const {
+        return std::tie(Source, Target) < std::tie(Other.Source, Other.Target);
+      }
+    };
+    struct TextEdgeInfo {
+      uint64_t Count = 0;
+      bool Approx = false;
+      bool Unattributed = false;
+      bool Trampoline = false;
+    };
+    std::map<TextEdgeKey, TextEdgeInfo> Counts;
     for (XRefEdge &E : Edges) {
       if (!ShowGC && (E.Target.isGarbageCollected() ||
                        (E.Referrer && E.Referrer.isGarbageCollected())))
@@ -837,45 +1018,241 @@ private:
         continue;
       if (isIntraFileExcluded(E))
         continue;
-      Out << referrerToString(E.Referrer, E.Kind) << " -> "
-          << qualifySymbol(E.Target);
-      if (E.Trampoline)
-        Out << " [trampoline]";
+      auto TargetIt = SymbolIDs.find(E.Target);
+      if (TargetIt == SymbolIDs.end())
+        continue;
+      int64_t Source = -1;
+      if (E.Referrer) {
+        auto SourceIt = SymbolIDs.find(E.Referrer);
+        if (SourceIt == SymbolIDs.end())
+          continue;
+        Source = SourceIt->second;
+      }
+      TextEdgeInfo &Info = Counts[{Source, TargetIt->second}];
+      ++Info.Count;
+      Info.Approx |= E.Kind == AttributionKind::NearestPreceding;
+      Info.Unattributed |= E.Kind == AttributionKind::Unattributed;
+      Info.Trampoline |= E.Trampoline;
+    }
+
+    Out << "# Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t"
+           "<output-section>\n";
+    Out << "#   '?' address means garbage-collected; section is the linked "
+           "output section.\n";
+    Out << "#   with usedwarf=yes, source appears after the name as "
+           "(file:line).\n";
+    for (uint32_t ID = 0; ID < PrintedSymbols.size(); ++ID)
+      Out << ID << "\t" << qualifySymbol(PrintedSymbols[ID]) << "\t"
+          << outputSectionName(PrintedSymbols[ID]) << "\n";
+    Out << "# Edges: <src-id>\t<dst-id>\t<count>\t<flags>\n";
+    Out << "#   '-' source means unattributed; '-' flags means none; flags: "
+           "approx, unattributed, trampoline.\n";
+    for (const auto &Entry : Counts) {
+      const TextEdgeKey &K = Entry.first;
+      const TextEdgeInfo &Info = Entry.second;
+      if (K.Source < 0)
+        Out << "-";
+      else
+        Out << K.Source;
+      Out << "\t" << K.Target << "\t" << Info.Count << "\t";
+      bool HasFlag = false;
+      if (Info.Approx) {
+        Out << "approx";
+        HasFlag = true;
+      }
+      if (Info.Unattributed) {
+        Out << (HasFlag ? "," : "") << "unattributed";
+        HasFlag = true;
+      }
+      if (Info.Trampoline) {
+        Out << (HasFlag ? "," : "") << "trampoline";
+        HasFlag = true;
+      }
+      if (!HasFlag)
+        Out << "-";
       Out << "\n";
     }
-    Out << "# Symbols:\n";
-    for (Symbol &Sym : AllSymbols) {
-      if (!ShowGC && Sym.isGarbageCollected())
-        continue;
-      if (isExcluded(Sym))
-        continue;
-      Out << qualifySymbol(Sym) << "\n";
-    }
   }
 
-  void writeJSONDump(std::ofstream &Out) {
+  static llvm::StringRef dashboardKindToString(uint8_t Kind) {
+    switch (Kind) {
+    case 0:
+      return "code";
+    case 1:
+      return "rodata";
+    case 2:
+      return "data";
+    case 3:
+      return "bss";
+    }
+    return "code";
+  }
+
+  void writeDashboardObject(std::ofstream &Out) {
+    llvm::json::Array Nodes;
+    for (uint32_t ID = 0; ID < DashboardSections.size(); ++ID) {
+      const DashboardSection &S = DashboardSections[ID];
+      llvm::json::Object Node{{"id", ID},
+                              {"name", S.Name},
+                              {"path", S.Path},
+                              {"kind", dashboardKindToString(S.Kind)},
+                              {"size", S.Size}};
+      if (!S.Live)
+        Node["live"] = false;
+      if (S.Root)
+        Node["root"] = true;
+      if (!S.Output.empty())
+        Node["out"] = S.Output;
+      Nodes.push_back(std::move(Node));
+    }
+
     llvm::json::Array JSONEdges;
-    for (XRefEdge &E : Edges) {
-      if (!ShowGC && (E.Target.isGarbageCollected() ||
-                       (E.Referrer && E.Referrer.isGarbageCollected())))
-        continue;
-      if (isExcluded(E.Target) || (E.Referrer && isExcluded(E.Referrer)))
-        continue;
-      if (isIntraFileExcluded(E))
-        continue;
-      JSONEdges.push_back(edgeToJSON(E));
+    for (const auto &Entry : DashboardEdgeCounts) {
+      llvm::json::Object Edge{{"src", Entry.first.first},
+                              {"dst", Entry.first.second},
+                              {"count", Entry.second}};
+      JSONEdges.push_back(std::move(Edge));
     }
-    llvm::json::Array JSONSymbols;
-    for (Symbol &Sym : AllSymbols) {
-      if (!ShowGC && Sym.isGarbageCollected())
-        continue;
-      if (isExcluded(Sym))
-        continue;
-      JSONSymbols.push_back(symbolToJSON(Sym));
+    llvm::json::Object Root{{"nodes", std::move(Nodes)},
+                            {"edges", std::move(JSONEdges)}};
+    Out << llvm::formatv("{0}\n", llvm::json::Value(std::move(Root))).str();
+  }
+
+  void writeDashboardColumnar(std::ofstream &Out) {
+    using StringKey = std::pair<int, std::string>;
+    std::map<StringKey, int> DirIDs;
+    std::vector<StringKey> Dirs;
+    std::map<StringKey, int> FileIDs;
+    std::vector<StringKey> Files;
+    std::map<std::string, int> OutIDs;
+    std::vector<std::string> Outs;
+
+    auto internDir = [&](int Parent, const std::string &Name) {
+      StringKey Key{Parent, Name};
+      auto It = DirIDs.find(Key);
+      if (It != DirIDs.end())
+        return It->second;
+      int ID = Dirs.size();
+      DirIDs.emplace(Key, ID);
+      Dirs.push_back(std::move(Key));
+      return ID;
+    };
+    auto internFile = [&](int Dir, const std::string &Name) {
+      StringKey Key{Dir, Name};
+      auto It = FileIDs.find(Key);
+      if (It != FileIDs.end())
+        return It->second;
+      int ID = Files.size();
+      FileIDs.emplace(Key, ID);
+      Files.push_back(std::move(Key));
+      return ID;
+    };
+    auto internOut = [&](const std::string &Name) {
+      auto It = OutIDs.find(Name);
+      if (It != OutIDs.end())
+        return It->second;
+      int ID = Outs.size();
+      OutIDs.emplace(Name, ID);
+      Outs.push_back(Name);
+      return ID;
+    };
+    auto internPath = [&](const std::string &Path) {
+      size_t Slash = Path.rfind('/');
+      std::string DirPart = Slash == std::string::npos
+                                ? ""
+                                : Path.substr(0, Slash);
+      std::string Base = Slash == std::string::npos ? Path
+                                                      : Path.substr(Slash + 1);
+      int Parent = -1;
+      size_t Start = 0;
+      while (Start < DirPart.size()) {
+        size_t End = DirPart.find('/', Start);
+        if (End == std::string::npos)
+          End = DirPart.size();
+        if (End > Start)
+          Parent = internDir(Parent, DirPart.substr(Start, End - Start));
+        Start = End + 1;
+      }
+      return internFile(Parent, Base.empty() ? "unknown" : Base);
+    };
+
+    std::vector<int> SectionFiles;
+    std::vector<int> SectionOuts;
+    SectionFiles.reserve(DashboardSections.size());
+    SectionOuts.reserve(DashboardSections.size());
+    for (const DashboardSection &S : DashboardSections) {
+      SectionFiles.push_back(internPath(S.Path));
+      SectionOuts.push_back(S.Output.empty() ? -1 : internOut(S.Output));
     }
-    llvm::json::Object Root{{"edges", std::move(JSONEdges)},
-                             {"symbols", std::move(JSONSymbols)}};
-    Out << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Root))).str();
+
+    llvm::json::Object Strings;
+    llvm::json::Array JSONDirs;
+    for (const StringKey &D : Dirs) {
+      llvm::json::Array Entry;
+      Entry.push_back(D.first);
+      Entry.push_back(D.second);
+      JSONDirs.push_back(std::move(Entry));
+    }
+    Strings["dirs"] = std::move(JSONDirs);
+    llvm::json::Array JSONFiles;
+    for (const StringKey &F : Files) {
+      llvm::json::Array Entry;
+      Entry.push_back(F.first);
+      Entry.push_back(F.second);
+      JSONFiles.push_back(std::move(Entry));
+    }
+    Strings["files"] = std::move(JSONFiles);
+    llvm::json::Array JSONOuts;
+    for (const std::string &Name : Outs)
+      JSONOuts.push_back(Name);
+    Strings["outs"] = std::move(JSONOuts);
+
+    llvm::json::Object Sections;
+    Sections["count"] = static_cast<uint32_t>(DashboardSections.size());
+    llvm::json::Array Sizes, FileIDsJSON, OutIDsJSON, Kinds, Flags, Names;
+    for (size_t I = 0; I < DashboardSections.size(); ++I) {
+      const DashboardSection &S = DashboardSections[I];
+      Sizes.push_back(S.Size);
+      FileIDsJSON.push_back(SectionFiles[I]);
+      OutIDsJSON.push_back(SectionOuts[I]);
+      Kinds.push_back(S.Kind);
+      uint8_t SectionFlags = (!S.Live ? 1 : 0) | (S.Root ? 2 : 0);
+      Flags.push_back(SectionFlags);
+      Names.push_back(S.Name);
+    }
+    Sections["size"] = std::move(Sizes);
+    Sections["file"] = std::move(FileIDsJSON);
+    Sections["out"] = std::move(OutIDsJSON);
+    Sections["kind"] = std::move(Kinds);
+    Sections["flags"] = std::move(Flags);
+    Sections["name"] = std::move(Names);
+
+    llvm::json::Object Refs;
+    llvm::json::Array Offsets, Targets, Counts;
+    Offsets.push_back(0);
+    uint64_t RefCount = 0;
+    for (uint32_t Src = 0; Src < DashboardSections.size(); ++Src) {
+      auto Begin = DashboardEdgeCounts.lower_bound({Src, 0});
+      for (auto It = Begin; It != DashboardEdgeCounts.end() &&
+                            It->first.first == Src;
+           ++It) {
+        const auto &Entry = *It;
+        Targets.push_back(Entry.first.second);
+        Counts.push_back(Entry.second);
+        ++RefCount;
+      }
+      Offsets.push_back(RefCount);
+    }
+    Refs["offsets"] = std::move(Offsets);
+    Refs["targets"] = std::move(Targets);
+    Refs["counts"] = std::move(Counts);
+
+    llvm::json::Object Root{{"format", "fia-columnar"},
+                            {"version", 1},
+                            {"strings", std::move(Strings)},
+                            {"sections", std::move(Sections)},
+                            {"refs", std::move(Refs)}};
+    Out << llvm::formatv("{0}\n", llvm::json::Value(std::move(Root))).str();
   }
 
   void writeDump() {
@@ -888,8 +1265,10 @@ private:
           DumpPath);
       return;
     }
-    if (Format == OutputFormat::JSON)
-      writeJSONDump(Out);
+    if (Format == OutputFormat::DashboardObject)
+      writeDashboardObject(Out);
+    else if (Format == OutputFormat::DashboardColumnar)
+      writeDashboardColumnar(Out);
     else
       writeTextDump(Out);
   }
@@ -900,11 +1279,15 @@ private:
   bool CppDemangle = false;
   bool UseDWARF = false;
   OutputFormat Format = OutputFormat::Text;
+  std::string SourceRoot;
+  bool HasSourceRoot = false;
+  bool HasStripPrefix = false;
+  std::optional<llvm::GlobPattern> StripPrefixPattern;
   std::deque<std::string> GlobStorage;
   std::vector<llvm::GlobPattern> ExcludeSymbolPatterns;
   std::vector<llvm::GlobPattern> ExcludeFilePatterns;
   std::vector<llvm::GlobPattern> IncludeSymbolPatterns;
-  bool ExcludeLocal = false;
+  bool ExcludeLocal = true;
   bool ExcludeFunctions = false;
   bool ExcludeData = false;
   uint64_t MinSize = 0;
@@ -917,6 +1300,9 @@ private:
   std::unordered_map<Symbol, SourceLoc> SymbolSourceLoc;
   std::vector<XRefEdge> Edges;
   std::vector<Symbol> AllSymbols;
+  std::vector<DashboardSection> DashboardSections;
+  std::unordered_map<Section, uint32_t> DashboardSectionIds;
+  std::map<std::pair<uint32_t, uint32_t>, uint64_t> DashboardEdgeCounts;
 };
 
 ELD_REGISTER_PLUGIN(CrossReference)
