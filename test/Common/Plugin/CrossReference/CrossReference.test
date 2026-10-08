@@ -47,9 +47,17 @@ RUN: rm -f xref_dump.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigFormatJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %python -c "import json; d = json.load(open('xref_dump.json')); print('JSON_OBJECT', bool(d['nodes']), bool(d['edges']), any(n['name'] == 'deep_rw_data' and n['kind'] == 'data' for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-JSON
 RUN: rm -f xref_dump.json
+RUN: rm -f xref_coalesced.json
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t7.out --plugin-config %p/Inputs/PluginConfigFormatJSONCoalesced.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import json; d = json.load(open('xref_coalesced.json')); print('JSON_COALESCED', d['coalesce_dirs'], any('\u27eb' in n['path'] for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-JSON-COALESCED
+RUN: rm -f xref_coalesced.json
 RUN: rm -f xref_columnar.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t9.out --plugin-config %p/Inputs/PluginConfigFormatColumnar.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %python -c "import json; d = json.load(open('xref_columnar.json')); print('JSON_COLUMNAR', d['format'], d['version'], d['sections']['count'] == len(d['sections']['size']), len(d['refs']['offsets']) == d['sections']['count'] + 1)" | %filecheck %s --check-prefix=DUMP-COLUMNAR
+RUN: rm -f xref_coalesced_columnar.json
+RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t12.out --plugin-config %p/Inputs/PluginConfigFormatColumnarCoalesced.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import json; d = json.load(open('xref_coalesced_columnar.json')); print('JSON_COLUMNAR_COALESCED', d['coalesce_dirs'], any('\u27eb' in x[1] for x in d['strings']['dirs']))" | %filecheck %s --check-prefix=DUMP-COLUMNAR-COALESCED
+RUN: rm -f xref_coalesced_columnar.json
 RUN: rm -f xref_root.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t10.out --plugin-config %p/Inputs/PluginConfigSourceRoot.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %python -c "import json; d = json.load(open('xref_root.json')); print('SOURCE_ROOT', all(not n['path'].startswith('/') for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-SOURCE-ROOT
@@ -64,7 +72,9 @@ FORMAT-ERROR: CrossReference does not support format 'binary'; only 'text', 'jso
 FORMAT-ERROR: Fatal: Linking had errors
 
 DUMP-JSON: JSON_OBJECT True True True
+DUMP-JSON-COALESCED: JSON_COALESCED unary True
 DUMP-COLUMNAR: JSON_COLUMNAR fia-columnar 1 True True
+DUMP-COLUMNAR-COALESCED: JSON_COLUMNAR_COALESCED unary True
 DUMP-SOURCE-ROOT: SOURCE_ROOT True
 DUMP-STRIP-PREFIX: STRIP_PREFIX True
 

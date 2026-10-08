@@ -30,6 +30,7 @@ The supported options are:
 | `format=text\|json\|json_columnar` | `text` | Selects the output format. |
 | `source_root=<path>` | unset | Removes this complete path prefix from object-file paths, DWARF paths, and dashboard paths. |
 | `strip_prefix=<glob>` | unset | Removes the longest complete path prefix matching an LLVM glob. Mutually exclusive with `source_root`. |
+| `coalesce_dirs=none\|unary` | `none` | In JSON formats, folds empty single-child directory chains after the first two path components. |
 | `show_gc=yes\|no` | `no` | Includes garbage-collected symbols and edges in text output. |
 | `cpp_demangle=yes\|no` | `no` | Demangles C++ names in output and name-pattern matching. |
 | `usedwarf=yes\|no` | `no` | Looks up function and variable declaration locations in DWARF. |
@@ -58,6 +59,14 @@ prefixes, retaining the longest matching prefix. For example,
 `strip_prefix=*/build/*` can remove a variable build-root prefix. The cleanup
 is applied consistently to object paths, DWARF source paths, dashboard paths,
 file-filter matching, and intra-file comparisons.
+
+`coalesce_dirs=unary` is applied only to dashboard JSON paths. It preserves the
+first two directory components, then folds a directory when it has no object
+file directly beneath it and exactly one child directory. Folded components
+are joined with `⟫`, so a path such as `modem_proc/core/a/b/c.o` may be emitted
+as `modem_proc/core/a⟫b/c.o`. The JSON root also contains
+`"coalesce_dirs":"unary"` so consumers can identify the display-oriented
+path mode. Text output is unchanged.
 
 ### Filtering
 
@@ -154,6 +163,9 @@ This format contains one node for each allocatable, non-discarded ELF input
 section. If a section has a suitable function or object symbol, that symbol is
 used as the node name; otherwise the input section name is used.
 
+When enabled, the JSON root also contains `"coalesce_dirs":"unary"`. Node
+`path` values use `⟫` inside a directory component to show folded path levels.
+
 ```json
 {
   "nodes": [
@@ -224,6 +236,10 @@ The columnar format has this top-level shape:
   }
 }
 ```
+
+With `coalesce_dirs=unary`, the top-level object additionally contains
+`"coalesce_dirs":"unary"`, and folded directory components in
+`strings.dirs` use `⟫` between their original names.
 
 `strings.dirs` contains `[parent_directory_id, name]` entries, with `-1`
 meaning no parent. `strings.files` contains `[directory_id, basename]` entries.

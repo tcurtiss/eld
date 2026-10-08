@@ -72,6 +72,11 @@
 //                            section-oriented object format consumed by
 //                            image_analysis. "json_columnar" produces its
 //                            compressed columnar format.
+//   coalesce_dirs=none|unary
+//                          -- in JSON formats, fold empty single-child
+//                            directory chains after the first two path
+//                            components (default: none). Folded components
+//                            are joined with the visible separator "⟫".
 //   source_root=<path>    -- remove this path prefix from source paths in all
 //                            output formats. The prefix is removed only when
 //                            it is a complete path component.
@@ -220,6 +225,134 @@ struct DashboardSection {
   bool Root = false;
 };
 
+// Compresses directory paths for dashboard display without changing the
+// section or edge graph. A directory with no files of its own and exactly one
+// child is folded into that child. The first two components are retained so
+// the dashboard's top-level-directory and subsystem groupings remain stable.
+class DashboardPathCoalescer {
+public:
+  static constexpr const char *Separator = "⟫";
+
+  void build(const std::vector<std::string> &Paths) {
+    Nodes.clear();
+    NodeIDs.clear();
+    SeenPaths.clear();
+    Cache.clear();
+    for (const std::string &Path : Paths) {
+      if (!SeenPaths.insert(Path).second)
+        continue;
+      addPath(Path);
+    }
+    for (Node &N : Nodes)
+      N.Keep = N.DirectFiles != 0 || N.Children.size() != 1 || N.Depth < 2;
+  }
+
+  std::string coalesce(const std::string &Path) const {
+    auto Cached = Cache.find(Path);
+    if (Cached != Cache.end())
+      return Cached->second;
+
+    size_t Slash = Path.rfind('/');
+    std::string DirPart = Slash == std::string::npos
+                              ? ""
+                              : Path.substr(0, Slash);
+    bool Absolute = !DirPart.empty() && DirPart.front() == '/';
+    std::string Base = Slash == std::string::npos ? Path
+                                                   : Path.substr(Slash + 1);
+    int Parent = -1;
+    std::string ResultDir;
+    std::string Pending;
+    size_t Start = 0;
+    while (Start < DirPart.size()) {
+      size_t End = DirPart.find('/', Start);
+      if (End == std::string::npos)
+        End = DirPart.size();
+      if (End > Start) {
+        std::string Name = DirPart.substr(Start, End - Start);
+        auto It = NodeIDs.find({Parent, Name});
+        if (It == NodeIDs.end()) {
+          // Paths passed to coalesce() are normally all present during build;
+          // retain an unknown path unchanged rather than corrupting it.
+          Cache.emplace(Path, Path);
+          return Path;
+        }
+        const Node &N = Nodes[It->second];
+        Parent = It->second;
+        if (!Pending.empty())
+          Pending += Separator;
+        Pending += Name;
+        if (N.Keep) {
+          if (!ResultDir.empty())
+            ResultDir += '/';
+          ResultDir += Pending;
+          Pending.clear();
+        }
+      }
+      Start = End + 1;
+    }
+    if (!Pending.empty()) {
+      if (!ResultDir.empty())
+        ResultDir += '/';
+      ResultDir += Pending;
+    }
+    std::string Result = ResultDir.empty() ? Base : ResultDir + '/' + Base;
+    if (Absolute && !Result.empty())
+      Result.insert(Result.begin(), '/');
+    Cache.emplace(Path, Result);
+    return Result;
+  }
+
+private:
+  struct Node {
+    int Parent = -1;
+    std::string Name;
+    std::vector<int> Children;
+    uint32_t DirectFiles = 0;
+    uint32_t Depth = 0;
+    bool Keep = true;
+  };
+
+  void addPath(const std::string &Path) {
+    size_t Slash = Path.rfind('/');
+    std::string DirPart = Slash == std::string::npos
+                              ? ""
+                              : Path.substr(0, Slash);
+    int Parent = -1;
+    int Last = -1;
+    size_t Start = 0;
+    while (Start < DirPart.size()) {
+      size_t End = DirPart.find('/', Start);
+      if (End == std::string::npos)
+        End = DirPart.size();
+      if (End > Start) {
+        std::string Name = DirPart.substr(Start, End - Start);
+        auto It = NodeIDs.find({Parent, Name});
+        int ID;
+        if (It == NodeIDs.end()) {
+          ID = Nodes.size();
+          NodeIDs.emplace(std::make_pair(Parent, Name), ID);
+          Nodes.push_back({Parent, Name, {}, 0,
+                           Parent < 0 ? 0u : Nodes[Parent].Depth + 1, true});
+          if (Parent >= 0)
+            Nodes[Parent].Children.push_back(ID);
+        } else {
+          ID = It->second;
+        }
+        Parent = ID;
+        Last = ID;
+      }
+      Start = End + 1;
+    }
+    if (Last >= 0)
+      ++Nodes[Last].DirectFiles;
+  }
+
+  std::map<std::pair<int, std::string>, int> NodeIDs;
+  std::vector<Node> Nodes;
+  std::unordered_set<std::string> SeenPaths;
+  mutable std::unordered_map<std::string, std::string> Cache;
+};
+
 } // namespace
 
 class CrossReference : public LinkerPlugin {
@@ -267,6 +400,21 @@ public:
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
               "CrossReference does not support format '%0'; only "
               "'text', 'json', and 'json_columnar' are supported"),
+              Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "coalesce_dirs") {
+        if (Value == "none") {
+          CoalesceDirs = false;
+        } else if (Value == "unary") {
+          CoalesceDirs = true;
+        } else {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's coalesce_dirs option must be 'none' or "
+              "'unary', got '%0'"),
               Value);
           return;
         }
@@ -442,6 +590,13 @@ public:
     buildStubMap();
     collectAllSymbols();
     buildDashboardSections();
+    if (CoalesceDirs) {
+      std::vector<std::string> Paths;
+      Paths.reserve(DashboardSections.size());
+      for (const DashboardSection &S : DashboardSections)
+        Paths.push_back(S.Path);
+      DashboardPathCompressor.build(Paths);
+    }
     buildChunkSymbolIndex();
     walkReferences();
     computeIncomingRefCounts();
@@ -1107,7 +1262,7 @@ private:
       const DashboardSection &S = DashboardSections[ID];
       llvm::json::Object Node{{"id", ID},
                               {"name", S.Name},
-                              {"path", S.Path},
+                              {"path", dashboardPath(S.Path)},
                               {"kind", dashboardKindToString(S.Kind)},
                               {"size", S.Size}};
       if (!S.Live)
@@ -1128,6 +1283,8 @@ private:
     }
     llvm::json::Object Root{{"nodes", std::move(Nodes)},
                             {"edges", std::move(JSONEdges)}};
+    if (CoalesceDirs)
+      Root["coalesce_dirs"] = "unary";
     Out << llvm::formatv("{0}\n", llvm::json::Value(std::move(Root))).str();
   }
 
@@ -1194,7 +1351,7 @@ private:
     SectionFiles.reserve(DashboardSections.size());
     SectionOuts.reserve(DashboardSections.size());
     for (const DashboardSection &S : DashboardSections) {
-      SectionFiles.push_back(internPath(S.Path));
+      SectionFiles.push_back(internPath(dashboardPath(S.Path)));
       SectionOuts.push_back(S.Output.empty() ? -1 : internOut(S.Output));
     }
 
@@ -1265,7 +1422,13 @@ private:
                             {"strings", std::move(Strings)},
                             {"sections", std::move(Sections)},
                             {"refs", std::move(Refs)}};
+    if (CoalesceDirs)
+      Root["coalesce_dirs"] = "unary";
     Out << llvm::formatv("{0}\n", llvm::json::Value(std::move(Root))).str();
+  }
+
+  std::string dashboardPath(const std::string &Path) const {
+    return CoalesceDirs ? DashboardPathCompressor.coalesce(Path) : Path;
   }
 
   void writeDump() {
@@ -1291,6 +1454,7 @@ private:
   bool ShowGC = false;
   bool CppDemangle = false;
   bool UseDWARF = false;
+  bool CoalesceDirs = false;
   OutputFormat Format = OutputFormat::Text;
   std::string SourceRoot;
   bool HasSourceRoot = false;
@@ -1314,6 +1478,7 @@ private:
   std::vector<XRefEdge> Edges;
   std::vector<Symbol> AllSymbols;
   std::vector<DashboardSection> DashboardSections;
+  DashboardPathCoalescer DashboardPathCompressor;
   std::unordered_map<Section, Symbol> PrimarySectionSymbols;
   std::unordered_map<Section, uint32_t> DashboardSectionIds;
   std::map<std::pair<uint32_t, uint32_t>, uint64_t> DashboardEdgeCounts;
