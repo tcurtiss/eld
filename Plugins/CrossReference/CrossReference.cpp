@@ -174,6 +174,7 @@
 
 #include "LinkerPlugin.h"
 #include "PluginVersion.h"
+#include "eld/PluginAPI/ThreadPool.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/JSON.h"
@@ -360,6 +361,7 @@ public:
   CrossReference() : LinkerPlugin("CrossReference") {}
 
   void Init(const std::string &options) override {
+    OutputPathCache.clear();
     std::istringstream Tokens(options);
     std::string Token;
     while (std::getline(Tokens, Token, ':')) {
@@ -587,22 +589,64 @@ public:
   void ActBeforeWritingOutput() override {
     if (HasError)
       return;
-    buildStubMap();
-    collectAllSymbols();
-    buildDashboardSections();
+    {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference buildStubMap", "CrossReference",
+          getLinker()->isTimingEnabled()));
+      buildStubMap();
+    }
+    {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference collectAllSymbols", "CrossReference",
+          getLinker()->isTimingEnabled()));
+      collectAllSymbols();
+    }
+    {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference buildDashboardSections", "CrossReference",
+          getLinker()->isTimingEnabled()));
+      buildDashboardSections();
+    }
     if (CoalesceDirs) {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference coalesceDashboardPaths", "CrossReference",
+          getLinker()->isTimingEnabled()));
       std::vector<std::string> Paths;
       Paths.reserve(DashboardSections.size());
       for (const DashboardSection &S : DashboardSections)
         Paths.push_back(S.Path);
       DashboardPathCompressor.build(Paths);
     }
-    buildChunkSymbolIndex();
-    walkReferences();
-    computeIncomingRefCounts();
-    if (UseDWARF)
+    {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference buildChunkSymbolIndex", "CrossReference",
+          getLinker()->isTimingEnabled()));
+      buildChunkSymbolIndex();
+    }
+    {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference walkReferences", "CrossReference",
+          getLinker()->isTimingEnabled()));
+      walkReferences();
+    }
+    {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference computeIncomingRefCounts", "CrossReference",
+          getLinker()->isTimingEnabled()));
+      computeIncomingRefCounts();
+    }
+    if (UseDWARF) {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference buildDWARFIndex", "CrossReference",
+          getLinker()->isTimingEnabled()));
       buildDWARFIndex();
-    writeDump();
+    }
+    {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference writeDump", "CrossReference",
+          getLinker()->isTimingEnabled()));
+      writeDump();
+    }
   }
 
   void Destroy() override {}
@@ -615,12 +659,53 @@ private:
     bool Trampoline;
   };
 
+  struct ReferenceWorkResult {
+    std::vector<XRefEdge> Edges;
+    std::map<std::pair<uint32_t, uint32_t>, uint64_t> DashboardEdgeCounts;
+  };
+
+  struct StubWorkResult {
+    std::vector<std::pair<Symbol, Symbol>> Mappings;
+    std::vector<Chunk> Chunks;
+  };
+
   static std::string normalizeSeparators(std::string Path) {
     std::replace(Path.begin(), Path.end(), '\\', '/');
     return Path;
   }
 
+  size_t workerCount(size_t WorkItems) const {
+    if (WorkItems < 2 || !getLinker()->isMultiThreaded())
+      return 1;
+    return std::max<size_t>(
+        1, std::min<size_t>(WorkItems, getLinker()->getPluginThreadCount()));
+  }
+
+  template <typename Function>
+  void forEachWorkItem(size_t WorkItems, Function &&Fn) {
+    size_t NumWorkers = workerCount(WorkItems);
+    if (NumWorkers == 1) {
+      for (size_t I = 0; I < WorkItems; ++I)
+        Fn(I);
+      return;
+    }
+
+    ThreadPool Pool(NumWorkers);
+    for (size_t I = 0; I < WorkItems; ++I) {
+      Pool.run([&, I] { Fn(I); });
+    }
+    Pool.wait();
+  }
+
   std::string outputPath(const std::string &RawPath) const {
+    auto Cached = OutputPathCache.find(RawPath);
+    if (Cached != OutputPathCache.end())
+      return Cached->second;
+
+    auto CacheResult = [&](std::string Result) {
+      OutputPathCache.emplace(RawPath, Result);
+      return Result;
+    };
     std::string Path = normalizeSeparators(RawPath);
     std::string Root = normalizeSeparators(SourceRoot);
     while (Root.size() > 1 && Root.back() == '/')
@@ -628,18 +713,18 @@ private:
     while (Path.size() > 1 && Path.back() == '/')
       Path.pop_back();
     if (Root.empty() && !HasStripPrefix)
-      return Path;
+      return CacheResult(Path);
     if (Root == "/") {
       if (!Path.empty() && Path.front() == '/')
-        return Path.substr(1);
-      return Path;
+        return CacheResult(Path.substr(1));
+      return CacheResult(Path);
     }
     if (!Root.empty() && Path == Root)
-      return "";
+      return CacheResult("");
     if (!Root.empty() && Path.size() > Root.size() &&
         Path.compare(0, Root.size(), Root) == 0 &&
         Path[Root.size()] == '/')
-      return Path.substr(Root.size() + 1);
+      return CacheResult(Path.substr(Root.size() + 1));
     if (StripPrefixPattern) {
       // GlobPattern reports only whether a complete string matches. Try each
       // possible path prefix and retain the longest complete path-component
@@ -659,10 +744,10 @@ private:
       if (MatchLength != 0) {
         while (MatchLength < Path.size() && Path[MatchLength] == '/')
           ++MatchLength;
-        return Path.substr(MatchLength);
+        return CacheResult(Path.substr(MatchLength));
       }
     }
-    return Path;
+    return CacheResult(Path);
   }
 
   static uint8_t dashboardKind(const Section &S) {
@@ -696,6 +781,31 @@ private:
     return Name.empty() ? "<unknown>" : Name;
   }
 
+  void buildDashboardSectionsForInputFile(
+      InputFile &IF, const std::string &Path,
+      std::vector<DashboardSection> &Sections) {
+    for (Section &S : IF.getSections()) {
+      // The dashboard models image input sections. Non-allocatable ELF
+      // sections (debug, symbol and relocation tables) are not image nodes.
+      if (!S.isELFSection() || !S.isAlloc() || S.isNull() || S.isDiscarded())
+        continue;
+
+      DashboardSection DS;
+      DS.Handle = S;
+      DS.Path = Path.empty() ? "(unknown)/unknown" : Path;
+      DS.Name = S.getName();
+      auto Primary = PrimarySectionSymbols.find(S);
+      if (Primary != PrimarySectionSymbols.end())
+        DS.Name = symbolDisplayName(Primary->second);
+      DS.Output = S.getOutputSection().getName();
+      DS.Size = S.getSize();
+      DS.Kind = dashboardKind(S);
+      DS.Live = !S.isGarbageCollected();
+      DS.Root = DS.Live && S.getLinkerScriptRule().isKeep();
+      Sections.push_back(std::move(DS));
+    }
+  }
+
   void buildDashboardSections() {
     PrimarySectionSymbols.clear();
     for (Symbol &Sym : AllSymbols) {
@@ -714,41 +824,35 @@ private:
       if (It == PrimarySectionSymbols.end() || (Typed && !ExistingTyped) ||
           (Typed == ExistingTyped &&
            Sym.getOffsetInChunk() < It->second.getOffsetInChunk())) {
-        if (It == PrimarySectionSymbols.end()) {
+        if (It == PrimarySectionSymbols.end())
           PrimarySectionSymbols.emplace(S, Sym);
-        } else {
+        else
           It->second = Sym;
-        }
       }
     }
 
+    DashboardSections.clear();
+    DashboardSectionIds.clear();
+    std::vector<InputFile> InputFiles;
+    std::vector<std::string> Paths;
     for (InputFile &IF : getLinker()->getInputFiles()) {
       if (!IF.hasInputFile() || IF.isBitcode())
         continue;
-      for (Section &S : IF.getSections()) {
-        // The dashboard models image input sections. Non-allocatable ELF
-        // sections (debug, symbol and relocation tables) are not image nodes.
-        if (!S.isELFSection() || !S.isAlloc() || S.isNull() ||
-            S.isDiscarded())
-          continue;
+      InputFiles.push_back(IF);
+      // outputPath() owns a mutable cache, so normalize paths before entering
+      // worker threads and pass the immutable result to each worker.
+      Paths.push_back(outputPath(IF.decoratedPath()));
+    }
 
-        DashboardSection DS;
-        DS.Handle = S;
-        DS.Path = outputPath(IF.decoratedPath());
-        if (DS.Path.empty())
-          DS.Path = "(unknown)/unknown";
-        DS.Name = S.getName();
-        auto Primary = PrimarySectionSymbols.find(S);
-        if (Primary != PrimarySectionSymbols.end())
-          DS.Name = symbolDisplayName(Primary->second);
-        DS.Output = S.getOutputSection().getName();
-        DS.Size = S.getSize();
-        DS.Kind = dashboardKind(S);
-        DS.Live = !S.isGarbageCollected();
-        DS.Root = DS.Live && S.getLinkerScriptRule().isKeep();
+    std::vector<std::vector<DashboardSection>> Sections(InputFiles.size());
+    forEachWorkItem(InputFiles.size(), [&](size_t I) {
+      buildDashboardSectionsForInputFile(InputFiles[I], Paths[I], Sections[I]);
+    });
 
+    for (std::vector<DashboardSection> &FileSections : Sections) {
+      for (DashboardSection &DS : FileSections) {
         uint32_t ID = DashboardSections.size();
-        DashboardSectionIds.emplace(S, ID);
+        DashboardSectionIds.emplace(DS.Handle, ID);
         DashboardSections.push_back(std::move(DS));
       }
     }
@@ -893,24 +997,40 @@ private:
   // Populates StubSymbolToTarget (stub symbol -> real target symbol) and
   // StubChunks (chunks that are themselves branch islands), by inspecting
   // every stub created in every output section.
+  void buildStubMapForOutputSection(OutputSection &O, StubWorkResult &Result) {
+    for (Stub &St : O.getStubs()) {
+      Symbol StubSym = St.getStubSymbol();
+      Symbol TargetSym = St.getTargetSymbol();
+      if (!StubSym || !TargetSym)
+        continue;
+      Result.Mappings.emplace_back(StubSym, TargetSym);
+      Chunk StubChunk = StubSym.getChunk();
+      if (StubChunk)
+        Result.Chunks.push_back(StubChunk);
+    }
+  }
+
   void buildStubMap() {
+    StubSymbolToTarget.clear();
+    StubChunks.clear();
     eld::Expected<std::vector<OutputSection>> ExpSections =
         getLinker()->getAllOutputSections();
     if (!ExpSections) {
       getLinker()->reportDiagEntry(std::move(ExpSections.error()));
       return;
     }
-    for (OutputSection &O : ExpSections.value()) {
-      for (Stub &St : O.getStubs()) {
-        Symbol StubSym = St.getStubSymbol();
-        Symbol TargetSym = St.getTargetSymbol();
-        if (!StubSym || !TargetSym)
-          continue;
-        StubSymbolToTarget.emplace(StubSym, TargetSym);
-        Chunk StubChunk = StubSym.getChunk();
-        if (StubChunk)
-          StubChunks.insert(StubChunk);
-      }
+
+    std::vector<OutputSection> &OutputSections = ExpSections.value();
+    std::vector<StubWorkResult> Results(OutputSections.size());
+    forEachWorkItem(OutputSections.size(), [&](size_t I) {
+      buildStubMapForOutputSection(OutputSections[I], Results[I]);
+    });
+
+    for (StubWorkResult &Result : Results) {
+      for (const auto &Mapping : Result.Mappings)
+        StubSymbolToTarget.emplace(Mapping.first, Mapping.second);
+      for (Chunk C : Result.Chunks)
+        StubChunks.insert(C);
     }
   }
 
@@ -920,14 +1040,14 @@ private:
   // symbol's [Offset, Offset + Size) range, or NearestPreceding otherwise.
   static AttributionKind findReferrer(const std::vector<SymbolOffset> &Sorted,
                                        off_t SiteOffset, Symbol &OutSym) {
-    const SymbolOffset *Best = nullptr;
-    for (const SymbolOffset &SO : Sorted) {
-      if (SO.Offset > SiteOffset)
-        break;
-      Best = &SO;
-    }
-    if (!Best)
+    auto It = std::upper_bound(
+        Sorted.begin(), Sorted.end(), SiteOffset,
+        [](off_t Offset, const SymbolOffset &SO) {
+          return Offset < SO.Offset;
+        });
+    if (It == Sorted.begin())
       return AttributionKind::Unattributed;
+    const SymbolOffset *Best = &*std::prev(It);
     OutSym = Best->Sym;
     if (SiteOffset < Best->Offset + static_cast<off_t>(Best->Size))
       return AttributionKind::Exact;
@@ -942,6 +1062,7 @@ private:
   // it. AllSymbols is sourced from InputFile::getSymbols(), which has no
   // such exclusion, so this cache stays correct for the pre-GC graph.
   void buildChunkSymbolIndex() {
+    ChunkSymbolsCache.clear();
     for (Symbol &Sym : AllSymbols) {
       Chunk C = Sym.getChunk();
       if (!C)
@@ -949,100 +1070,123 @@ private:
       ChunkSymbolsCache[C].push_back(
           {Sym, Sym.getOffsetInChunk(), Sym.getSize()});
     }
-    for (auto &Entry : ChunkSymbolsCache) {
-      std::sort(Entry.second.begin(), Entry.second.end(),
+    std::vector<std::vector<SymbolOffset> *> SortWork;
+    SortWork.reserve(ChunkSymbolsCache.size());
+    for (auto &Entry : ChunkSymbolsCache)
+      SortWork.push_back(&Entry.second);
+
+    forEachWorkItem(SortWork.size(), [&](size_t I) {
+      std::vector<SymbolOffset> *Symbols = SortWork[I];
+      std::sort(Symbols->begin(), Symbols->end(),
                 [](const SymbolOffset &A, const SymbolOffset &B) {
                   return A.Offset < B.Offset;
                 });
-    }
+    });
   }
 
   // Returns the offset-sorted symbol list for the chunk that defines Sym, as
   // computed by buildChunkSymbolIndex(). Returns an empty list if the chunk
   // defines no symbols known to AllSymbols.
-  const std::vector<SymbolOffset> &getSortedSymbols(Chunk &C) {
+  const std::vector<SymbolOffset> &getSortedSymbols(Chunk &C) const {
     static const std::vector<SymbolOffset> Empty;
     auto It = ChunkSymbolsCache.find(C);
     return It != ChunkSymbolsCache.end() ? It->second : Empty;
   }
 
-  void walkReferences() {
-    for (InputFile &IF : getLinker()->getInputFiles()) {
-      if (!IF.hasInputFile() || IF.isBitcode())
+  void walkReferencesForInputFile(InputFile &IF, ReferenceWorkResult &Result) {
+    for (Section &S : IF.getSections()) {
+      // Discarded sections (e.g. duplicate COMDAT group members) never
+      // had live relocations to begin with. Garbage-collected sections
+      // are deliberately still walked: their relocations and fragment
+      // identity remain intact (GC only marks sections Ignore; it does
+      // not clear relocation data or move fragments), so their edges can
+      // still be recovered and included in the pre-GC connectivity graph.
+      if (!S.isELFSection() || S.isDiscarded())
         continue;
-      for (Section &S : IF.getSections()) {
-        // Discarded sections (e.g. duplicate COMDAT group members) never
-        // had live relocations to begin with. Garbage-collected sections
-        // are deliberately still walked: their relocations and fragment
-        // identity remain intact (GC only marks sections Ignore; it does
-        // not clear relocation data or move fragments), so their edges can
-        // still be recovered and included in the pre-GC connectivity graph.
-        if (!S.isELFSection() || S.isDiscarded())
-          continue;
 
-        eld::Expected<std::vector<Use>> ExpUses = getLinker()->getUses(S);
-        if (!ExpUses) {
-          getLinker()->reportDiagEntry(std::move(ExpUses.error()));
-          continue;
-        }
-        for (Use &U : ExpUses.value()) {
-          Chunk SrcChunk = U.getSourceChunk();
-          if (!SrcChunk || StubChunks.count(SrcChunk))
-            continue;
-
-          Symbol TargetSym = U.getSymbol();
-          // Some relocations (e.g. R_RISCV_RELAX, a linker-relaxation
-          // hint) point at the reserved symtab entry 0 rather than any
-          // real symbol. That resolves to the linker's internal null-
-          // symbol sentinel: a non-null Symbol handle with an empty name
-          // and no origin file. Such a "reference" has no real callee to
-          // report, so it is skipped here rather than passed to
-          // qualifySymbol(), which assumes every symbol it prints has an
-          // origin file.
-          if (!TargetSym || TargetSym.getName().empty())
-            continue;
-          bool Trampoline = false;
-          auto StubIt = StubSymbolToTarget.find(TargetSym);
-          if (StubIt != StubSymbolToTarget.end()) {
-            TargetSym = StubIt->second;
-            Trampoline = true;
-          }
-
-          const std::vector<SymbolOffset> &Sorted = getSortedSymbols(SrcChunk);
-          Symbol ReferrerSym(nullptr);
-          AttributionKind Kind =
-              findReferrer(Sorted, U.getOffsetInChunk(), ReferrerSym);
-          Section SrcSection = SrcChunk.getSection();
-          if (Kind == AttributionKind::Unattributed && SrcSection &&
-              !SrcSection.isCode()) {
-            auto Primary = PrimarySectionSymbols.find(SrcSection);
-            if (Primary != PrimarySectionSymbols.end() &&
-                Primary->second.isObject()) {
-              // Data sections such as vtables can contain a relocation before
-              // the first symbol covered by the chunk index. Associate those
-              // references with the section's primary data symbol instead of
-              // losing the source entirely.
-              ReferrerSym = Primary->second;
-              Kind = AttributionKind::NearestPreceding;
-            }
-          }
-          Edges.push_back({TargetSym, ReferrerSym, Kind, Trampoline});
-
-          // The dashboard graph is section-oriented. Keep it independent of
-          // symbol filters and show_gc: eliminated sections are deliberately
-          // retained as nodes, and repeated relocations are merged into one
-          // weighted source-to-target edge.
-          Chunk TargetChunk = TargetSym.getChunk();
-          if (!TargetChunk)
-            continue;
-          Section DstSection = TargetChunk.getSection();
-          auto SrcIt = DashboardSectionIds.find(SrcSection);
-          auto DstIt = DashboardSectionIds.find(DstSection);
-          if (SrcIt != DashboardSectionIds.end() &&
-              DstIt != DashboardSectionIds.end() && SrcIt->second != DstIt->second)
-            ++DashboardEdgeCounts[{SrcIt->second, DstIt->second}];
-        }
+      eld::Expected<std::vector<Use>> ExpUses = getLinker()->getUses(S);
+      if (!ExpUses) {
+        getLinker()->reportDiagEntry(std::move(ExpUses.error()));
+        continue;
       }
+      for (Use &U : ExpUses.value()) {
+        Chunk SrcChunk = U.getSourceChunk();
+        if (!SrcChunk || StubChunks.count(SrcChunk))
+          continue;
+
+        Symbol TargetSym = U.getSymbol();
+        // Some relocations (e.g. R_RISCV_RELAX, a linker-relaxation
+        // hint) point at the reserved symtab entry 0 rather than any
+        // real symbol. That resolves to the linker's internal null-
+        // symbol sentinel: a non-null Symbol handle with an empty name
+        // and no origin file. Such a "reference" has no real callee to
+        // report, so it is skipped here rather than passed to
+        // qualifySymbol(), which assumes every symbol it prints has an
+        // origin file.
+        if (!TargetSym || TargetSym.getName().empty())
+          continue;
+        bool Trampoline = false;
+        auto StubIt = StubSymbolToTarget.find(TargetSym);
+        if (StubIt != StubSymbolToTarget.end()) {
+          TargetSym = StubIt->second;
+          Trampoline = true;
+        }
+
+        const std::vector<SymbolOffset> &Sorted = getSortedSymbols(SrcChunk);
+        Symbol ReferrerSym(nullptr);
+        AttributionKind Kind =
+            findReferrer(Sorted, U.getOffsetInChunk(), ReferrerSym);
+        Section SrcSection = SrcChunk.getSection();
+        if (Kind == AttributionKind::Unattributed && SrcSection &&
+            !SrcSection.isCode()) {
+          auto Primary = PrimarySectionSymbols.find(SrcSection);
+          if (Primary != PrimarySectionSymbols.end() &&
+              Primary->second.isObject()) {
+            // Data sections such as vtables can contain a relocation before
+            // the first symbol covered by the chunk index. Associate those
+            // references with the section's primary data symbol instead of
+            // losing the source entirely.
+            ReferrerSym = Primary->second;
+            Kind = AttributionKind::NearestPreceding;
+          }
+        }
+        Result.Edges.push_back({TargetSym, ReferrerSym, Kind, Trampoline});
+
+        // The dashboard graph is section-oriented. Keep it independent of
+        // symbol filters and show_gc: eliminated sections are deliberately
+        // retained as nodes, and repeated relocations are merged into one
+        // weighted source-to-target edge.
+        Chunk TargetChunk = TargetSym.getChunk();
+        if (!TargetChunk)
+          continue;
+        Section DstSection = TargetChunk.getSection();
+        auto SrcIt = DashboardSectionIds.find(SrcSection);
+        auto DstIt = DashboardSectionIds.find(DstSection);
+        if (SrcIt != DashboardSectionIds.end() &&
+            DstIt != DashboardSectionIds.end() &&
+            SrcIt->second != DstIt->second)
+          ++Result.DashboardEdgeCounts[{SrcIt->second, DstIt->second}];
+      }
+    }
+  }
+
+  void walkReferences() {
+    Edges.clear();
+    DashboardEdgeCounts.clear();
+    std::vector<InputFile> InputFiles;
+    for (InputFile &IF : getLinker()->getInputFiles())
+      if (IF.hasInputFile() && !IF.isBitcode())
+        InputFiles.push_back(IF);
+
+    std::vector<ReferenceWorkResult> Results(InputFiles.size());
+    forEachWorkItem(InputFiles.size(), [&](size_t I) {
+      walkReferencesForInputFile(InputFiles[I], Results[I]);
+    });
+
+    for (ReferenceWorkResult &Result : Results) {
+      Edges.insert(Edges.end(), Result.Edges.begin(), Result.Edges.end());
+      for (const auto &Entry : Result.DashboardEdgeCounts)
+        DashboardEdgeCounts[Entry.first] += Entry.second;
     }
   }
 
@@ -1056,12 +1200,19 @@ private:
   // a "?" address, since qualifySymbol() cannot report a real address for
   // a symbol that never reached final layout).
   void collectAllSymbols() {
-    for (InputFile &IF : getLinker()->getInputFiles()) {
-      if (!IF.hasInputFile() || IF.isBitcode())
-        continue;
-      for (Symbol &Sym : IF.getSymbols())
-        AllSymbols.push_back(Sym);
-    }
+    AllSymbols.clear();
+    std::vector<InputFile> InputFiles;
+    for (InputFile &IF : getLinker()->getInputFiles())
+      if (IF.hasInputFile() && !IF.isBitcode())
+        InputFiles.push_back(IF);
+
+    std::vector<std::vector<Symbol>> Symbols(InputFiles.size());
+    forEachWorkItem(InputFiles.size(), [&](size_t I) {
+      Symbols[I] = InputFiles[I].getSymbols();
+    });
+
+    for (std::vector<Symbol> &FileSymbols : Symbols)
+      AllSymbols.insert(AllSymbols.end(), FileSymbols.begin(), FileSymbols.end());
   }
 
   // Populates SymbolSourceLoc (symbol -> declaring source file + line) from
@@ -1072,19 +1223,33 @@ private:
   // whose input file has none, simply have no entry and are reported without
   // source location, same as before this option existed.
   void buildDWARFIndex() {
-    std::unordered_map<InputFile, std::unordered_map<std::string, SourceLoc>>
-        PerFileNamedDIEs;
+    SymbolSourceLoc.clear();
+    std::vector<InputFile> InputFiles;
+    std::unordered_map<InputFile, size_t> InputFileIDs;
     for (Symbol &Sym : AllSymbols) {
       InputFile IF = Sym.getInputFile();
       if (!IF)
         continue;
-      auto FileIt = PerFileNamedDIEs.find(IF);
-      if (FileIt == PerFileNamedDIEs.end())
-        FileIt = PerFileNamedDIEs
-                     .emplace(IF, indexNamedDIEsByName(IF))
-                     .first;
-      auto NameIt = FileIt->second.find(Sym.getName());
-      if (NameIt != FileIt->second.end())
+      if (InputFileIDs.find(IF) == InputFileIDs.end()) {
+        size_t ID = InputFiles.size();
+        InputFileIDs.emplace(IF, ID);
+        InputFiles.push_back(IF);
+      }
+    }
+
+    using NamedDIEIndex = std::unordered_map<std::string, SourceLoc>;
+    std::vector<NamedDIEIndex> PerFileNamedDIEs(InputFiles.size());
+    forEachWorkItem(InputFiles.size(), [&](size_t I) {
+      PerFileNamedDIEs[I] = indexNamedDIEsByName(InputFiles[I]);
+    });
+
+    for (Symbol &Sym : AllSymbols) {
+      InputFile IF = Sym.getInputFile();
+      auto FileIt = InputFileIDs.find(IF);
+      if (FileIt == InputFileIDs.end())
+        continue;
+      auto NameIt = PerFileNamedDIEs[FileIt->second].find(Sym.getName());
+      if (NameIt != PerFileNamedDIEs[FileIt->second].end())
         SymbolSourceLoc.emplace(Sym, NameIt->second);
     }
   }
@@ -1470,6 +1635,7 @@ private:
   uint64_t MinSize = 0;
   uint64_t MinRefs = 0;
   bool ExcludeIntraFile = false;
+  mutable std::unordered_map<std::string, std::string> OutputPathCache;
   std::unordered_map<Symbol, uint64_t> IncomingRefCount;
   std::unordered_map<Symbol, Symbol> StubSymbolToTarget;
   std::unordered_set<Chunk> StubChunks;

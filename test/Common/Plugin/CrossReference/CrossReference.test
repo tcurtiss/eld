@@ -33,6 +33,9 @@ RUN: rm -f xref_dump.txt
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
 RUN: rm -f xref_dump.txt
+RUN: %link --no-threads --emit-relocs %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t1.serial.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
+RUN: rm -f xref_dump.txt
 RUN: %link %linkopts --gc-sections %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-GC-HIDDEN
 RUN: rm -f xref_dump.txt

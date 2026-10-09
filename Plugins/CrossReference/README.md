@@ -88,6 +88,20 @@ the symbol filters, `show_gc`, or `exclude_intra_file`. They contain the
 section graph independently of the text dump filters. `cpp_demangle` and path
 cleanup still affect dashboard names and paths.
 
+## Parallel work
+
+When ELD is multithreaded, the plugin uses the Plugin API thread pool for
+independent input-file work: symbol collection, dashboard section discovery,
+relocation/reference walking, and per-file DWARF indexing. Stub discovery and
+per-chunk symbol sorting are also partitioned into independent tasks. Each task
+builds private results, which are merged in input order, so text and JSON
+output remains deterministic. With `--no-threads` (or a single configured
+thread), the same code executes directly without creating a worker pool.
+
+The plugin records timers for each major phase. They are visible when ELD
+timing statistics are enabled, for example with `--emit-timing-stats` and an
+appropriate `--time-region` selection.
+
 ## Reference graph construction
 
 For every usable relocation/`Use`, the plugin identifies the source chunk and
