@@ -3,7 +3,7 @@
 # Exercises CrossReference defaults, option diagnostics, symbol/edge filtering,
 # exact attribution, repeated-reference counts,
 # dashboard garbage-collection behavior, columnar invariants, KEEP roots,
-# empty graphs, and output-file failures.
+# empty graphs, gzip output, and output-file failures.
 #END_COMMENT
 #START_TEST
 RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.o -ffunction-sections -fdata-sections -fno-inline
@@ -46,6 +46,18 @@ RUN: rm -f xref_robust_columnar.json
 RUN: %link %linkopts --gc-sections %t1.o %t2.o -e main -o %t9.out --plugin-config %p/Inputs/PluginConfigColumnarGC.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %python -c "import json; d=json.load(open('xref_robust_columnar.json')); s=d['sections']; names=s['name']; print('COLUMNAR-SHAPE', len(s['size'])==s['count'], len(s['file'])==s['count'], len(d['refs']['offsets'])==s['count']+1); print('COLUMNAR-GC', 'local_fn' in names, any(n=='unused' and (f & 1) for n,f in zip(names,s['flags']))); print('COLUMNAR-COUNT', any(names[src]=='caller' and names[dst]=='target' and c==2 for src in range(s['count']) for j,c in enumerate(d['refs']['counts'][d['refs']['offsets'][src]:d['refs']['offsets'][src+1]]) for dst in [d['refs']['targets'][d['refs']['offsets'][src]+j]]))" | %filecheck %s --check-prefix=COLUMNAR
 
+RUN: rm -f xref_gzip.txt xref_gzip.txt.gz
+RUN: %link %linkopts %t1.o %t2.o -e main -o %t21.out --plugin-config %p/Inputs/PluginConfigGzipText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import gzip,os; d=gzip.open('xref_gzip.txt.gz','rt').read(); print('GZIP-TEXT', d.startswith('# Symbols:'), os.path.exists('xref_gzip.txt.gz'), not os.path.exists('xref_gzip.txt'))" | %filecheck %s --check-prefix=GZIP-TEXT
+
+RUN: rm -f xref_gzip.json xref_gzip.json.gz
+RUN: %link %linkopts %t1.o %t2.o -e main -o %t22.out --plugin-config %p/Inputs/PluginConfigGzipJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import gzip,json,os; d=json.load(gzip.open('xref_gzip.json.gz','rt')); print('GZIP-JSON', bool(d['nodes']), os.path.exists('xref_gzip.json.gz'), not os.path.exists('xref_gzip.json'))" | %filecheck %s --check-prefix=GZIP-JSON
+
+RUN: rm -f xref_gzip_columnar.json xref_gzip_columnar.json.gz
+RUN: %link %linkopts %t1.o %t2.o -e main -o %t23.out --plugin-config %p/Inputs/PluginConfigGzipColumnar.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %python -c "import gzip,json,os; d=json.load(gzip.open('xref_gzip_columnar.json.gz','rt')); print('GZIP-COLUMNAR', d['format']=='fia-columnar', os.path.exists('xref_gzip_columnar.json.gz'), not os.path.exists('xref_gzip_columnar.json'))" | %filecheck %s --check-prefix=GZIP-COLUMNAR
+
 RUN: rm -f xref_keep.json
 RUN: %link %linkopts --gc-sections %t1.o %t2.o -T %p/Inputs/keep.t -e main -o %t10.out --plugin-config %p/Inputs/PluginConfigJSONKeep.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %python -c "import json; d=json.load(open('xref_keep.json')); ns={n['name']:n for n in d['nodes']}; print('KEEP-ROOT', ns['kept'].get('root', False), ns['unused'].get('live', True) is False)" | %filecheck %s --check-prefix=KEEP
@@ -67,8 +79,9 @@ RUN: %not %link %linkopts %t1.o -e main -o %t16.out --plugin-config %p/Inputs/Pl
 RUN: %not %link %linkopts %t1.o -e main -o %t17.out --plugin-config %p/Inputs/PluginConfigInvalidNumber.yaml 2>&1 | %filecheck %s --check-prefix=INVALID-NUMBER
 RUN: %not %link %linkopts %t1.o -e main -o %t18.out --plugin-config %p/Inputs/PluginConfigConflictingPaths.yaml 2>&1 | %filecheck %s --check-prefix=CONFLICTING-PATHS
 RUN: %not %link %linkopts %t1.o -e main -o %t19.out --plugin-config %p/Inputs/PluginConfigInvalidStripGlob.yaml 2>&1 | %filecheck %s --check-prefix=INVALID-STRIP
+RUN: %not %link %linkopts %t1.o -e main -o %t24.out --plugin-config %p/Inputs/PluginConfigInvalidGzip.yaml 2>&1 | %filecheck %s --check-prefix=INVALID-GZIP
 RUN: %not %link %linkopts %t1.o %t2.o -e main -o %t20.out --plugin-config %p/Inputs/PluginConfigOutputFailure.yaml 2>&1 | %filecheck %s --check-prefix=OUTPUT-FAILURE
-RUN: rm -f xref_robust.txt xref_robust.json xref_robust_columnar.json xref_keep.json xref_path.json xref_norefs.txt
+RUN: rm -f xref_robust.txt xref_robust.json xref_robust_columnar.json xref_keep.json xref_path.json xref_norefs.txt xref_gzip.txt xref_gzip.txt.gz xref_gzip.json xref_gzip.json.gz xref_gzip_columnar.json xref_gzip_columnar.json.gz
 #END_TEST
 
 LINK-NOT: Error
@@ -122,6 +135,9 @@ JSON-GC: JSON-COUNT True
 COLUMNAR: COLUMNAR-SHAPE True True True
 COLUMNAR: COLUMNAR-GC True True
 COLUMNAR: COLUMNAR-COUNT True
+GZIP-TEXT: GZIP-TEXT True True True
+GZIP-JSON: GZIP-JSON True True True
+GZIP-COLUMNAR: GZIP-COLUMNAR True True True
 KEEP: KEEP-ROOT True True
 PATH: SOURCE-ROOT-BOUNDARY True
 NO-REFS: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
@@ -136,4 +152,5 @@ INVALID-YESNO: CrossReference's show_gc option must be 'yes' or 'no'
 INVALID-NUMBER: CrossReference's min_refs option must be a non-negative integer
 CONFLICTING-PATHS: CrossReference options 'source_root' and 'strip_prefix' are mutually exclusive
 INVALID-STRIP: CrossReference could not parse strip_prefix glob pattern '[unterminated'
+INVALID-GZIP: CrossReference's gzip option must be 'yes' or 'no', got 'maybe'
 OUTPUT-FAILURE: CrossReference could not open dump file '/definitely/missing/crossreference/output/xref.txt' for writing

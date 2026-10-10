@@ -28,6 +28,7 @@ The supported options are:
 | --- | --- | --- |
 | `file=<path>` | required | Output file. Existing contents are replaced. |
 | `format=text\|json\|json_columnar` | `text` | Selects the output format. |
+| `gzip=yes\|no` | `no` | Compresses the selected output format as gzip and appends `.gz` to the output path. |
 | `source_root=<path>` | unset | Removes this complete path prefix from object-file paths, DWARF paths, and dashboard paths. |
 | `strip_prefix=<glob>` | unset | Removes the longest complete path prefix matching an LLVM glob. Mutually exclusive with `source_root`. |
 | `coalesce_dirs=none\|unary` | `none` | In JSON formats, folds empty single-child directory chains after the first two path components. |
@@ -47,6 +48,11 @@ The supported options are:
 `yes`/`no` values are case-sensitive. Unknown options, duplicate `file`
 options, malformed numbers or globs, missing `file`, and simultaneous
 `source_root`/`strip_prefix` options are errors.
+
+When `gzip=yes`, the plugin writes the serialized text or JSON output to
+`<file>.gz`; the uncompressed file is not created. This applies to all three
+output formats. For example, `file=xref.json:format=json:gzip=yes` writes
+`xref.json.gz`.
 
 ### Path cleanup
 
@@ -93,10 +99,22 @@ cleanup still affect dashboard names and paths.
 When ELD is multithreaded, the plugin uses the Plugin API thread pool for
 independent input-file work: symbol collection, dashboard section discovery,
 relocation/reference walking, and per-file DWARF indexing. Stub discovery and
-per-chunk symbol sorting are also partitioned into independent tasks. Each task
-builds private results, which are merged in input order, so text and JSON
-output remains deterministic. With `--no-threads` (or a single configured
+per-chunk symbol sorting are also partitioned into independent tasks. The pool
+is reused across phases and uses a bounded number of worker tasks that claim
+work dynamically, which avoids creating one scheduler task per input item.
+Each worker builds private results, which are merged deterministically, so text
+and JSON output remains stable. With `--no-threads` (or a single configured
 thread), the same code executes directly without creating a worker pool.
+
+The plugin also avoids symbol-level attribution and DWARF indexing when a JSON
+format is selected, because those formats contain the section-level graph only.
+Repeated references are aggregated while they are walked, and repeated
+dashboard file paths and output-section names are interned. JSON serializers
+stream directly to the output stream; gzip output avoids an additional complete
+copy of the compressed payload. Text edge aggregation uses compact integer IDs,
+and the referrer index is stored as one contiguous symbol array with per-chunk
+ranges instead of one separately allocated vector per chunk. When DWARF is
+enabled, only names belonging to symbols that survive text filters are indexed.
 
 The plugin records timers for each major phase. They are visible when ELD
 timing statistics are enabled, for example with `--emit-timing-stats` and an

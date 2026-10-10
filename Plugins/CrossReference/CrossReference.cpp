@@ -72,6 +72,8 @@
 //                            section-oriented object format consumed by
 //                            image_analysis. "json_columnar" produces its
 //                            compressed columnar format.
+//   gzip=yes|no             -- compress the output using gzip and append
+//                            ".gz" to the file path (default: no).
 //   coalesce_dirs=none|unary
 //                          -- in JSON formats, fold empty single-child
 //                            directory chains after the first two path
@@ -175,15 +177,22 @@
 #include "LinkerPlugin.h"
 #include "PluginVersion.h"
 #include "eld/PluginAPI/ThreadPool.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Demangle/Demangle.h"
+#include "llvm/Support/Compression.h"
+#include "llvm/Support/CRC.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/raw_os_ostream.h"
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <deque>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -208,6 +217,11 @@ struct SymbolOffset {
   uint32_t Size;
 };
 
+struct ChunkSymbolRange {
+  uint32_t Begin = 0;
+  uint32_t End = 0;
+};
+
 // A symbol's DWARF-derived declaration site, as looked up by name from the
 // subprogram or variable DIEs of its defining input file's compile units.
 struct SourceLoc {
@@ -217,9 +231,9 @@ struct SourceLoc {
 
 struct DashboardSection {
   Section Handle;
-  std::string Path;
+  uint32_t PathID = 0;
   std::string Name;
-  std::string Output;
+  uint32_t OutputID = UINT32_MAX;
   uint64_t Size = 0;
   uint8_t Kind = 0;
   bool Live = true;
@@ -402,6 +416,16 @@ public:
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
               "CrossReference does not support format '%0'; only "
               "'text', 'json', and 'json_columnar' are supported"),
+              Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "gzip") {
+        if (!parseYesNo(Value, Gzip)) {
+          HasError = true;
+          getLinker()->reportDiag(getLinker()->getErrorDiagID(
+              "CrossReference's gzip option must be 'yes' or 'no', got '%0'"),
               Value);
           return;
         }
@@ -611,13 +635,9 @@ public:
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference coalesceDashboardPaths", "CrossReference",
           getLinker()->isTimingEnabled()));
-      std::vector<std::string> Paths;
-      Paths.reserve(DashboardSections.size());
-      for (const DashboardSection &S : DashboardSections)
-        Paths.push_back(S.Path);
-      DashboardPathCompressor.build(Paths);
+      DashboardPathCompressor.build(DashboardPaths);
     }
-    {
+    if (Format == OutputFormat::Text) {
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference buildChunkSymbolIndex", "CrossReference",
           getLinker()->isTimingEnabled()));
@@ -629,13 +649,13 @@ public:
           getLinker()->isTimingEnabled()));
       walkReferences();
     }
-    {
+    if (Format == OutputFormat::Text) {
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference computeIncomingRefCounts", "CrossReference",
           getLinker()->isTimingEnabled()));
       computeIncomingRefCounts();
     }
-    if (UseDWARF) {
+    if (UseDWARF && Format == OutputFormat::Text) {
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference buildDWARFIndex", "CrossReference",
           getLinker()->isTimingEnabled()));
@@ -649,19 +669,37 @@ public:
     }
   }
 
-  void Destroy() override {}
+  void Destroy() override {
+    WorkPool.reset();
+    WorkPoolThreads = 0;
+  }
 
 private:
   struct XRefEdge {
     Symbol Target;
     Symbol Referrer;
-    AttributionKind Kind;
-    bool Trampoline;
+    uint64_t Count = 0;
+    uint8_t Flags = 0;
+  };
+
+  enum EdgeFlag : uint8_t {
+    EdgeApprox = 1 << 0,
+    EdgeUnattributed = 1 << 1,
+    EdgeTrampoline = 1 << 2,
+  };
+
+  struct EdgeInfo {
+    uint64_t Count = 0;
+    uint8_t Flags = 0;
   };
 
   struct ReferenceWorkResult {
-    std::vector<XRefEdge> Edges;
-    std::map<std::pair<uint32_t, uint32_t>, uint64_t> DashboardEdgeCounts;
+    // The high and low 32-bit fields contain referrer-id + 1 and
+    // target-id + 1 respectively. A zero high field represents an
+    // unattributed edge. Integer keys avoid copying two Symbol handles and
+    // their hash state into every temporary edge entry.
+    std::unordered_map<uint64_t, EdgeInfo> Edges;
+    std::unordered_map<uint64_t, uint64_t> DashboardEdgeCounts;
   };
 
   struct StubWorkResult {
@@ -690,11 +728,22 @@ private:
       return;
     }
 
-    ThreadPool Pool(NumWorkers);
-    for (size_t I = 0; I < WorkItems; ++I) {
-      Pool.run([&, I] { Fn(I); });
+    if (!WorkPool || WorkPoolThreads != NumWorkers) {
+      WorkPool = std::make_unique<ThreadPool>(NumWorkers);
+      WorkPoolThreads = NumWorkers;
     }
-    Pool.wait();
+    std::atomic<size_t> Next{0};
+    for (size_t Worker = 0; Worker < NumWorkers; ++Worker) {
+      WorkPool->run([&] {
+        while (true) {
+          size_t I = Next.fetch_add(1, std::memory_order_relaxed);
+          if (I >= WorkItems)
+            break;
+          Fn(I);
+        }
+      });
+    }
+    WorkPool->wait();
   }
 
   std::string outputPath(const std::string &RawPath) const {
@@ -782,7 +831,7 @@ private:
   }
 
   void buildDashboardSectionsForInputFile(
-      InputFile &IF, const std::string &Path,
+      InputFile &IF, uint32_t PathID,
       std::vector<DashboardSection> &Sections) {
     for (Section &S : IF.getSections()) {
       // The dashboard models image input sections. Non-allocatable ELF
@@ -792,12 +841,17 @@ private:
 
       DashboardSection DS;
       DS.Handle = S;
-      DS.Path = Path.empty() ? "(unknown)/unknown" : Path;
+      DS.PathID = PathID;
       DS.Name = S.getName();
       auto Primary = PrimarySectionSymbols.find(S);
       if (Primary != PrimarySectionSymbols.end())
         DS.Name = symbolDisplayName(Primary->second);
-      DS.Output = S.getOutputSection().getName();
+      std::string Output = S.getOutputSection().getName();
+      if (!Output.empty()) {
+        auto OutputIt = DashboardOutputIDs.find(Output);
+        if (OutputIt != DashboardOutputIDs.end())
+          DS.OutputID = OutputIt->second;
+      }
       DS.Size = S.getSize();
       DS.Kind = dashboardKind(S);
       DS.Live = !S.isGarbageCollected();
@@ -833,20 +887,44 @@ private:
 
     DashboardSections.clear();
     DashboardSectionIds.clear();
+    DashboardPaths.clear();
+    DashboardPathIDs.clear();
+    DashboardOutputs.clear();
+    DashboardOutputIDs.clear();
+    if (eld::Expected<std::vector<OutputSection>> OutputSections =
+            getLinker()->getAllOutputSections()) {
+      for (const OutputSection &Output : OutputSections.value()) {
+        std::string Name = Output.getName();
+        if (Name.empty())
+          continue;
+        if (DashboardOutputIDs.find(Name) == DashboardOutputIDs.end()) {
+          uint32_t ID = DashboardOutputs.size();
+          DashboardOutputs.push_back(Name);
+          DashboardOutputIDs.emplace(std::move(Name), ID);
+        }
+      }
+    }
     std::vector<InputFile> InputFiles;
-    std::vector<std::string> Paths;
+    std::vector<uint32_t> PathIDs;
     for (InputFile &IF : getLinker()->getInputFiles()) {
       if (!IF.hasInputFile() || IF.isBitcode())
         continue;
       InputFiles.push_back(IF);
       // outputPath() owns a mutable cache, so normalize paths before entering
       // worker threads and pass the immutable result to each worker.
-      Paths.push_back(outputPath(IF.decoratedPath()));
+      std::string Path = outputPath(IF.decoratedPath());
+      auto It = DashboardPathIDs.find(Path);
+      if (It == DashboardPathIDs.end()) {
+        uint32_t ID = DashboardPaths.size();
+        DashboardPaths.push_back(Path);
+        It = DashboardPathIDs.emplace(std::move(Path), ID).first;
+      }
+      PathIDs.push_back(It->second);
     }
 
     std::vector<std::vector<DashboardSection>> Sections(InputFiles.size());
     forEachWorkItem(InputFiles.size(), [&](size_t I) {
-      buildDashboardSectionsForInputFile(InputFiles[I], Paths[I], Sections[I]);
+      buildDashboardSectionsForInputFile(InputFiles[I], PathIDs[I], Sections[I]);
     });
 
     for (std::vector<DashboardSection> &FileSections : Sections) {
@@ -991,7 +1069,7 @@ private:
     if (MinRefs == 0)
       return;
     for (const XRefEdge &E : Edges)
-      ++IncomingRefCount[E.Target];
+      IncomingRefCount[E.Target] += E.Count;
   }
 
   // Populates StubSymbolToTarget (stub symbol -> real target symbol) and
@@ -1038,7 +1116,7 @@ private:
   // explains a reference at SiteOffset within the same chunk: the nearest
   // preceding symbol, tagged Exact if SiteOffset actually falls within that
   // symbol's [Offset, Offset + Size) range, or NearestPreceding otherwise.
-  static AttributionKind findReferrer(const std::vector<SymbolOffset> &Sorted,
+  static AttributionKind findReferrer(llvm::ArrayRef<SymbolOffset> Sorted,
                                        off_t SiteOffset, Symbol &OutSym) {
     auto It = std::upper_bound(
         Sorted.begin(), Sorted.end(), SiteOffset,
@@ -1063,16 +1141,19 @@ private:
   // such exclusion, so this cache stays correct for the pre-GC graph.
   void buildChunkSymbolIndex() {
     ChunkSymbolsCache.clear();
+    ChunkSymbolIndex.clear();
+    ChunkSymbolIndex.reserve(AllSymbols.size());
+
+    std::unordered_map<Chunk, std::vector<SymbolOffset>> Temporary;
     for (Symbol &Sym : AllSymbols) {
       Chunk C = Sym.getChunk();
       if (!C)
         continue;
-      ChunkSymbolsCache[C].push_back(
-          {Sym, Sym.getOffsetInChunk(), Sym.getSize()});
+      Temporary[C].push_back({Sym, Sym.getOffsetInChunk(), Sym.getSize()});
     }
     std::vector<std::vector<SymbolOffset> *> SortWork;
-    SortWork.reserve(ChunkSymbolsCache.size());
-    for (auto &Entry : ChunkSymbolsCache)
+    SortWork.reserve(Temporary.size());
+    for (auto &Entry : Temporary)
       SortWork.push_back(&Entry.second);
 
     forEachWorkItem(SortWork.size(), [&](size_t I) {
@@ -1082,15 +1163,26 @@ private:
                   return A.Offset < B.Offset;
                 });
     });
+
+    for (auto &Entry : Temporary) {
+      uint32_t Begin = ChunkSymbolIndex.size();
+      ChunkSymbolIndex.insert(ChunkSymbolIndex.end(), Entry.second.begin(),
+                              Entry.second.end());
+      uint32_t End = ChunkSymbolIndex.size();
+      ChunkSymbolsCache.emplace(Entry.first, ChunkSymbolRange{Begin, End});
+    }
   }
 
   // Returns the offset-sorted symbol list for the chunk that defines Sym, as
   // computed by buildChunkSymbolIndex(). Returns an empty list if the chunk
   // defines no symbols known to AllSymbols.
-  const std::vector<SymbolOffset> &getSortedSymbols(Chunk &C) const {
-    static const std::vector<SymbolOffset> Empty;
+  llvm::ArrayRef<SymbolOffset> getSortedSymbols(Chunk &C) const {
     auto It = ChunkSymbolsCache.find(C);
-    return It != ChunkSymbolsCache.end() ? It->second : Empty;
+    if (It == ChunkSymbolsCache.end())
+      return {};
+    return llvm::ArrayRef<SymbolOffset>(
+        ChunkSymbolIndex.data() + It->second.Begin,
+        It->second.End - It->second.Begin);
   }
 
   void walkReferencesForInputFile(InputFile &IF, ReferenceWorkResult &Result) {
@@ -1132,25 +1224,51 @@ private:
           Trampoline = true;
         }
 
-        const std::vector<SymbolOffset> &Sorted = getSortedSymbols(SrcChunk);
         Symbol ReferrerSym(nullptr);
-        AttributionKind Kind =
-            findReferrer(Sorted, U.getOffsetInChunk(), ReferrerSym);
         Section SrcSection = SrcChunk.getSection();
-        if (Kind == AttributionKind::Unattributed && SrcSection &&
-            !SrcSection.isCode()) {
-          auto Primary = PrimarySectionSymbols.find(SrcSection);
-          if (Primary != PrimarySectionSymbols.end() &&
-              Primary->second.isObject()) {
-            // Data sections such as vtables can contain a relocation before
-            // the first symbol covered by the chunk index. Associate those
-            // references with the section's primary data symbol instead of
-            // losing the source entirely.
-            ReferrerSym = Primary->second;
-            Kind = AttributionKind::NearestPreceding;
+        uint8_t EdgeFlags = 0;
+        if (Format == OutputFormat::Text) {
+          llvm::ArrayRef<SymbolOffset> Sorted = getSortedSymbols(SrcChunk);
+          AttributionKind Kind =
+              findReferrer(Sorted, U.getOffsetInChunk(), ReferrerSym);
+          if (Kind == AttributionKind::Unattributed)
+            EdgeFlags |= EdgeUnattributed;
+          else if (Kind == AttributionKind::NearestPreceding)
+            EdgeFlags |= EdgeApprox;
+          if (Kind == AttributionKind::Unattributed && SrcSection &&
+              !SrcSection.isCode()) {
+            auto Primary = PrimarySectionSymbols.find(SrcSection);
+            if (Primary != PrimarySectionSymbols.end() &&
+                Primary->second.isObject()) {
+              // Data sections such as vtables can contain a relocation before
+              // the first symbol covered by the chunk index. Associate those
+              // references with the section's primary data symbol instead of
+              // losing the source entirely.
+              ReferrerSym = Primary->second;
+              EdgeFlags &= ~EdgeUnattributed;
+              EdgeFlags |= EdgeApprox;
+            }
           }
         }
-        Result.Edges.push_back({TargetSym, ReferrerSym, Kind, Trampoline});
+        if (Trampoline)
+          EdgeFlags |= EdgeTrampoline;
+        if (Format == OutputFormat::Text) {
+          auto TargetIt = SymbolIDs.find(TargetSym);
+          if (TargetIt != SymbolIDs.end()) {
+            uint32_t ReferrerID = 0;
+            if (ReferrerSym) {
+              auto ReferrerIt = SymbolIDs.find(ReferrerSym);
+              if (ReferrerIt != SymbolIDs.end())
+                ReferrerID = ReferrerIt->second + 1;
+            }
+            uint32_t TargetID = TargetIt->second + 1;
+            uint64_t Key = (static_cast<uint64_t>(ReferrerID) << 32) |
+                           static_cast<uint64_t>(TargetID);
+            EdgeInfo &Info = Result.Edges[Key];
+            ++Info.Count;
+            Info.Flags |= EdgeFlags;
+          }
+        }
 
         // The dashboard graph is section-oriented. Keep it independent of
         // symbol filters and show_gc: eliminated sections are deliberately
@@ -1164,8 +1282,11 @@ private:
         auto DstIt = DashboardSectionIds.find(DstSection);
         if (SrcIt != DashboardSectionIds.end() &&
             DstIt != DashboardSectionIds.end() &&
-            SrcIt->second != DstIt->second)
-          ++Result.DashboardEdgeCounts[{SrcIt->second, DstIt->second}];
+            SrcIt->second != DstIt->second) {
+          uint64_t Key = (static_cast<uint64_t>(SrcIt->second) << 32) |
+                         DstIt->second;
+          ++Result.DashboardEdgeCounts[Key];
+        }
       }
     }
   }
@@ -1183,10 +1304,32 @@ private:
       walkReferencesForInputFile(InputFiles[I], Results[I]);
     });
 
+    std::unordered_map<uint64_t, EdgeInfo> EdgeCounts;
     for (ReferenceWorkResult &Result : Results) {
-      Edges.insert(Edges.end(), Result.Edges.begin(), Result.Edges.end());
+      for (const auto &Entry : Result.Edges) {
+        EdgeInfo &Info = EdgeCounts[Entry.first];
+        Info.Count += Entry.second.Count;
+        Info.Flags |= Entry.second.Flags;
+      }
       for (const auto &Entry : Result.DashboardEdgeCounts)
         DashboardEdgeCounts[Entry.first] += Entry.second;
+      Result.Edges.clear();
+      Result.DashboardEdgeCounts.clear();
+    }
+    Edges.reserve(EdgeCounts.size());
+    for (const auto &Entry : EdgeCounts)
+      Edges.push_back(
+          {AllSymbols[(Entry.first & 0xffffffffu) - 1],
+           (Entry.first >> 32) == 0
+               ? Symbol(nullptr)
+               : AllSymbols[(Entry.first >> 32) - 1],
+           Entry.second.Count, Entry.second.Flags});
+    if (Format == OutputFormat::Text) {
+      SymbolIDs.clear();
+      SymbolIDs.rehash(0);
+      ChunkSymbolsCache.clear();
+      ChunkSymbolsCache.rehash(0);
+      std::vector<SymbolOffset>().swap(ChunkSymbolIndex);
     }
   }
 
@@ -1201,6 +1344,7 @@ private:
   // a symbol that never reached final layout).
   void collectAllSymbols() {
     AllSymbols.clear();
+    SymbolIDs.clear();
     std::vector<InputFile> InputFiles;
     for (InputFile &IF : getLinker()->getInputFiles())
       if (IF.hasInputFile() && !IF.isBitcode())
@@ -1211,8 +1355,14 @@ private:
       Symbols[I] = InputFiles[I].getSymbols();
     });
 
-    for (std::vector<Symbol> &FileSymbols : Symbols)
-      AllSymbols.insert(AllSymbols.end(), FileSymbols.begin(), FileSymbols.end());
+    for (std::vector<Symbol> &FileSymbols : Symbols) {
+      for (Symbol &Sym : FileSymbols) {
+        if (Format == OutputFormat::Text &&
+            SymbolIDs.find(Sym) == SymbolIDs.end())
+          SymbolIDs.emplace(Sym, AllSymbols.size());
+        AllSymbols.push_back(Sym);
+      }
+    }
   }
 
   // Populates SymbolSourceLoc (symbol -> declaring source file + line) from
@@ -1238,9 +1388,18 @@ private:
     }
 
     using NamedDIEIndex = std::unordered_map<std::string, SourceLoc>;
+    std::vector<std::unordered_set<std::string>> WantedNames(InputFiles.size());
+    for (Symbol &Sym : AllSymbols) {
+      auto FileIt = InputFileIDs.find(Sym.getInputFile());
+      if (FileIt == InputFileIDs.end() || isExcluded(Sym))
+        continue;
+      WantedNames[FileIt->second].insert(Sym.getName());
+    }
+
     std::vector<NamedDIEIndex> PerFileNamedDIEs(InputFiles.size());
     forEachWorkItem(InputFiles.size(), [&](size_t I) {
-      PerFileNamedDIEs[I] = indexNamedDIEsByName(InputFiles[I]);
+      PerFileNamedDIEs[I] =
+          indexNamedDIEsByName(InputFiles[I], WantedNames[I]);
     });
 
     for (Symbol &Sym : AllSymbols) {
@@ -1257,10 +1416,15 @@ private:
   // Parses IF's DWARF debug info (if any) and returns a map from each
   // subprogram or variable DIE's name to its declaring source file + line,
   // across every compile unit in the file. Returns an empty map if IF has no
-  // DWARF context (e.g. it was not compiled with debug info).
+  // DWARF context (e.g. it was not compiled with debug info). Only names in
+  // WantedNames are indexed; symbols filtered from the text dump do not need
+  // DWARF source locations.
   std::unordered_map<std::string, SourceLoc>
-  indexNamedDIEsByName(InputFile &IF) {
+  indexNamedDIEsByName(InputFile &IF,
+                      const std::unordered_set<std::string> &WantedNames) {
     std::unordered_map<std::string, SourceLoc> Index;
+    if (WantedNames.empty())
+      return Index;
     eld::Expected<DWARFInfo> ExpDI =
         getLinker()->getDWARFInfoForInputFile(IF, getLinker()->is32Bits());
     if (!ExpDI) {
@@ -1275,7 +1439,7 @@ private:
         if (!Die.isSubprogramDIE() && !Die.isVariable())
           continue;
         std::string Name = Die.getName();
-        if (Name.empty())
+        if (Name.empty() || WantedNames.find(Name) == WantedNames.end())
           continue;
         Index.emplace(Name, SourceLoc{Die.getDeclFile(), Die.getDeclLine()});
       }
@@ -1314,7 +1478,7 @@ private:
     return OS.str();
   }
 
-  void writeTextDump(std::ofstream &Out) {
+  void writeTextDump(std::ostream &Out) {
     std::unordered_map<Symbol, uint32_t> SymbolIDs;
     std::vector<Symbol> PrintedSymbols;
     for (Symbol &Sym : AllSymbols) {
@@ -1362,10 +1526,10 @@ private:
         Source = SourceIt->second;
       }
       TextEdgeInfo &Info = Counts[{Source, TargetIt->second}];
-      ++Info.Count;
-      Info.Approx |= E.Kind == AttributionKind::NearestPreceding;
-      Info.Unattributed |= E.Kind == AttributionKind::Unattributed;
-      Info.Trampoline |= E.Trampoline;
+      Info.Count += E.Count;
+      Info.Approx |= (E.Flags & EdgeApprox) != 0;
+      Info.Unattributed |= (E.Flags & EdgeUnattributed) != 0;
+      Info.Trampoline |= (E.Flags & EdgeTrampoline) != 0;
     }
 
     Out << "# Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t"
@@ -1421,39 +1585,52 @@ private:
     return "code";
   }
 
-  void writeDashboardObject(std::ofstream &Out) {
-    llvm::json::Array Nodes;
-    for (uint32_t ID = 0; ID < DashboardSections.size(); ++ID) {
-      const DashboardSection &S = DashboardSections[ID];
-      llvm::json::Object Node{{"id", ID},
-                              {"name", S.Name},
-                              {"path", dashboardPath(S.Path)},
-                              {"kind", dashboardKindToString(S.Kind)},
-                              {"size", S.Size}};
-      if (!S.Live)
-        Node["live"] = false;
-      if (S.Root)
-        Node["root"] = true;
-      if (!S.Output.empty())
-        Node["out"] = S.Output;
-      Nodes.push_back(std::move(Node));
-    }
+  void writeDashboardObject(std::ostream &Out) {
+    std::vector<std::pair<uint64_t, uint64_t>> SortedEdges;
+    SortedEdges.reserve(DashboardEdgeCounts.size());
+    for (const auto &Entry : DashboardEdgeCounts)
+      SortedEdges.push_back(Entry);
+    std::sort(SortedEdges.begin(), SortedEdges.end(),
+              [](const auto &A, const auto &B) { return A.first < B.first; });
 
-    llvm::json::Array JSONEdges;
-    for (const auto &Entry : DashboardEdgeCounts) {
-      llvm::json::Object Edge{{"src", Entry.first.first},
-                              {"dst", Entry.first.second},
-                              {"count", Entry.second}};
-      JSONEdges.push_back(std::move(Edge));
-    }
-    llvm::json::Object Root{{"nodes", std::move(Nodes)},
-                            {"edges", std::move(JSONEdges)}};
-    if (CoalesceDirs)
-      Root["coalesce_dirs"] = "unary";
-    Out << llvm::formatv("{0}\n", llvm::json::Value(std::move(Root))).str();
+    llvm::raw_os_ostream RawOut(Out);
+    llvm::json::OStream JSON(RawOut);
+    JSON.object([&] {
+      JSON.attributeArray("nodes", [&] {
+        for (uint32_t ID = 0; ID < DashboardSections.size(); ++ID) {
+          const DashboardSection &S = DashboardSections[ID];
+          JSON.object([&] {
+            JSON.attribute("id", ID);
+            JSON.attribute("name", S.Name);
+            JSON.attribute("path", dashboardPath(S.PathID));
+            JSON.attribute("kind", dashboardKindToString(S.Kind));
+            JSON.attribute("size", S.Size);
+            if (!S.Live)
+              JSON.attribute("live", false);
+            if (S.Root)
+              JSON.attribute("root", true);
+            if (S.OutputID != UINT32_MAX)
+              JSON.attribute("out", DashboardOutputs[S.OutputID]);
+          });
+        }
+      });
+      JSON.attributeArray("edges", [&] {
+        for (const auto &Entry : SortedEdges) {
+          JSON.object([&] {
+            JSON.attribute("src", static_cast<uint32_t>(Entry.first >> 32));
+            JSON.attribute("dst", static_cast<uint32_t>(Entry.first));
+            JSON.attribute("count", Entry.second);
+          });
+        }
+      });
+      if (CoalesceDirs)
+        JSON.attribute("coalesce_dirs", "unary");
+    });
+    JSON.flush();
+    RawOut << '\n';
   }
 
-  void writeDashboardColumnar(std::ofstream &Out) {
+  void writeDashboardColumnar(std::ostream &Out) {
     using StringKey = std::pair<int, std::string>;
     std::map<StringKey, int> DirIDs;
     std::vector<StringKey> Dirs;
@@ -1516,102 +1693,196 @@ private:
     SectionFiles.reserve(DashboardSections.size());
     SectionOuts.reserve(DashboardSections.size());
     for (const DashboardSection &S : DashboardSections) {
-      SectionFiles.push_back(internPath(dashboardPath(S.Path)));
-      SectionOuts.push_back(S.Output.empty() ? -1 : internOut(S.Output));
+      SectionFiles.push_back(internPath(dashboardPath(S.PathID)));
+      SectionOuts.push_back(S.OutputID == UINT32_MAX
+                                ? -1
+                                : internOut(DashboardOutputs[S.OutputID]));
     }
 
-    llvm::json::Object Strings;
-    llvm::json::Array JSONDirs;
-    for (const StringKey &D : Dirs) {
-      llvm::json::Array Entry;
-      Entry.push_back(D.first);
-      Entry.push_back(D.second);
-      JSONDirs.push_back(std::move(Entry));
-    }
-    Strings["dirs"] = std::move(JSONDirs);
-    llvm::json::Array JSONFiles;
-    for (const StringKey &F : Files) {
-      llvm::json::Array Entry;
-      Entry.push_back(F.first);
-      Entry.push_back(F.second);
-      JSONFiles.push_back(std::move(Entry));
-    }
-    Strings["files"] = std::move(JSONFiles);
-    llvm::json::Array JSONOuts;
-    for (const std::string &Name : Outs)
-      JSONOuts.push_back(Name);
-    Strings["outs"] = std::move(JSONOuts);
+    std::vector<std::pair<uint64_t, uint64_t>> SortedEdges;
+    SortedEdges.reserve(DashboardEdgeCounts.size());
+    for (const auto &Entry : DashboardEdgeCounts)
+      SortedEdges.push_back(Entry);
+    std::sort(SortedEdges.begin(), SortedEdges.end(),
+              [](const auto &A, const auto &B) { return A.first < B.first; });
 
-    llvm::json::Object Sections;
-    Sections["count"] = static_cast<uint32_t>(DashboardSections.size());
-    llvm::json::Array Sizes, FileIDsJSON, OutIDsJSON, Kinds, Flags, Names;
-    for (size_t I = 0; I < DashboardSections.size(); ++I) {
-      const DashboardSection &S = DashboardSections[I];
-      Sizes.push_back(S.Size);
-      FileIDsJSON.push_back(SectionFiles[I]);
-      OutIDsJSON.push_back(SectionOuts[I]);
-      Kinds.push_back(S.Kind);
-      uint8_t SectionFlags = (!S.Live ? 1 : 0) | (S.Root ? 2 : 0);
-      Flags.push_back(SectionFlags);
-      Names.push_back(S.Name);
-    }
-    Sections["size"] = std::move(Sizes);
-    Sections["file"] = std::move(FileIDsJSON);
-    Sections["out"] = std::move(OutIDsJSON);
-    Sections["kind"] = std::move(Kinds);
-    Sections["flags"] = std::move(Flags);
-    Sections["name"] = std::move(Names);
-
-    llvm::json::Object Refs;
-    llvm::json::Array Offsets, Targets, Counts;
-    Offsets.push_back(0);
-    uint64_t RefCount = 0;
-    for (uint32_t Src = 0; Src < DashboardSections.size(); ++Src) {
-      auto Begin = DashboardEdgeCounts.lower_bound({Src, 0});
-      for (auto It = Begin; It != DashboardEdgeCounts.end() &&
-                            It->first.first == Src;
-           ++It) {
-        const auto &Entry = *It;
-        Targets.push_back(Entry.first.second);
-        Counts.push_back(Entry.second);
-        ++RefCount;
-      }
-      Offsets.push_back(RefCount);
-    }
-    Refs["offsets"] = std::move(Offsets);
-    Refs["targets"] = std::move(Targets);
-    Refs["counts"] = std::move(Counts);
-
-    llvm::json::Object Root{{"format", "fia-columnar"},
-                            {"version", 1},
-                            {"strings", std::move(Strings)},
-                            {"sections", std::move(Sections)},
-                            {"refs", std::move(Refs)}};
-    if (CoalesceDirs)
-      Root["coalesce_dirs"] = "unary";
-    Out << llvm::formatv("{0}\n", llvm::json::Value(std::move(Root))).str();
+    llvm::raw_os_ostream RawOut(Out);
+    llvm::json::OStream JSON(RawOut);
+    JSON.object([&] {
+      JSON.attribute("format", "fia-columnar");
+      JSON.attribute("version", 1);
+      JSON.attributeObject("strings", [&] {
+        JSON.attributeArray("dirs", [&] {
+          for (const StringKey &D : Dirs)
+            JSON.array([&] {
+              JSON.value(D.first);
+              JSON.value(D.second);
+            });
+        });
+        JSON.attributeArray("files", [&] {
+          for (const StringKey &F : Files)
+            JSON.array([&] {
+              JSON.value(F.first);
+              JSON.value(F.second);
+            });
+        });
+        JSON.attributeArray("outs", [&] {
+          for (const std::string &Name : Outs)
+            JSON.value(Name);
+        });
+      });
+      JSON.attributeObject("sections", [&] {
+        JSON.attribute("count", static_cast<uint32_t>(DashboardSections.size()));
+        auto SectionValues = [&](auto Emit) {
+          for (size_t I = 0; I < DashboardSections.size(); ++I)
+            Emit(I, DashboardSections[I]);
+        };
+        JSON.attributeArray("size", [&] {
+          SectionValues([&](size_t, const DashboardSection &S) {
+            JSON.value(S.Size);
+          });
+        });
+        JSON.attributeArray("file", [&] {
+          SectionValues([&](size_t I, const DashboardSection &) {
+            JSON.value(SectionFiles[I]);
+          });
+        });
+        JSON.attributeArray("out", [&] {
+          SectionValues([&](size_t I, const DashboardSection &) {
+            JSON.value(SectionOuts[I]);
+          });
+        });
+        JSON.attributeArray("kind", [&] {
+          SectionValues([&](size_t, const DashboardSection &S) {
+            JSON.value(S.Kind);
+          });
+        });
+        JSON.attributeArray("flags", [&] {
+          SectionValues([&](size_t, const DashboardSection &S) {
+            uint8_t SectionFlags = (!S.Live ? 1 : 0) | (S.Root ? 2 : 0);
+            JSON.value(SectionFlags);
+          });
+        });
+        JSON.attributeArray("name", [&] {
+          SectionValues([&](size_t, const DashboardSection &S) {
+            JSON.value(S.Name);
+          });
+        });
+      });
+      JSON.attributeObject("refs", [&] {
+        JSON.attributeArray("offsets", [&] {
+          uint64_t RefCount = 0;
+          JSON.value(RefCount);
+          for (uint32_t Src = 0; Src < DashboardSections.size(); ++Src) {
+            while (RefCount < SortedEdges.size() &&
+                   (SortedEdges[RefCount].first >> 32) == Src)
+              ++RefCount;
+            JSON.value(RefCount);
+          }
+        });
+        JSON.attributeArray("targets", [&] {
+          for (const auto &Entry : SortedEdges)
+            JSON.value(static_cast<uint32_t>(Entry.first));
+        });
+        JSON.attributeArray("counts", [&] {
+          for (const auto &Entry : SortedEdges)
+            JSON.value(Entry.second);
+        });
+      });
+      if (CoalesceDirs)
+        JSON.attribute("coalesce_dirs", "unary");
+    });
+    JSON.flush();
+    RawOut << '\n';
   }
 
-  std::string dashboardPath(const std::string &Path) const {
+  std::string dashboardPath(uint32_t PathID) const {
+    const std::string &Path = DashboardPaths[PathID];
     return CoalesceDirs ? DashboardPathCompressor.coalesce(Path) : Path;
   }
 
-  void writeDump() {
-    std::ofstream Out(DumpPath, std::ios::out | std::ios::trunc);
+  static void writeLE32(std::ostream &Out, uint32_t Value) {
+    char Bytes[4];
+    for (unsigned Shift = 0; Shift < 32; Shift += 8)
+      Bytes[Shift / 8] = static_cast<char>((Value >> Shift) & 0xff);
+    Out.write(Bytes, sizeof(Bytes));
+  }
+
+  bool writeGzipDump(const std::string &Path, const std::string &Payload) {
+    if (!llvm::compression::zlib::isAvailable()) {
+      getLinker()->reportDiag(getLinker()->getErrorDiagID(
+          "CrossReference cannot use gzip because zlib support is unavailable"));
+      return false;
+    }
+
+    llvm::ArrayRef<uint8_t> Input(
+        reinterpret_cast<const uint8_t *>(Payload.data()), Payload.size());
+    llvm::SmallVector<uint8_t, 0> ZlibData;
+    llvm::compression::zlib::compress(
+        Input, ZlibData, llvm::compression::zlib::BestSizeCompression);
+    // LLVM's zlib helper produces a zlib-wrapped DEFLATE stream. Gzip uses
+    // the same DEFLATE payload, with a different header and trailer.
+    if (ZlibData.size() < 6) {
+      getLinker()->reportDiag(getLinker()->getErrorDiagID(
+          "CrossReference failed to create gzip output"));
+      return false;
+    }
+
+    const char Header[] = {char(0x1f), char(0x8b), char(0x08), char(0x00),
+                           char(0x00), char(0x00), char(0x00), char(0x00),
+                           char(0x02), char(0x03)};
+    std::ofstream Out(Path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!Out) {
       getLinker()->reportDiag(
           getLinker()->getErrorDiagID(
               "CrossReference could not open dump file '%0' for "
               "writing"),
-          DumpPath);
+          Path);
+      return false;
+    }
+    Out.write(Header, sizeof(Header));
+    Out.write(reinterpret_cast<const char *>(ZlibData.data() + 2),
+              ZlibData.size() - 6);
+    writeLE32(Out, llvm::crc32(Input));
+    writeLE32(Out, static_cast<uint32_t>(Payload.size()));
+    if (!Out) {
+      getLinker()->reportDiag(
+          getLinker()->getErrorDiagID(
+              "CrossReference could not write dump file '%0'"),
+          Path);
+      return false;
+    }
+    return true;
+  }
+
+  void writeDump() {
+    if (!Gzip) {
+      std::ofstream Out(DumpPath, std::ios::out | std::ios::trunc);
+      if (!Out) {
+        getLinker()->reportDiag(
+            getLinker()->getErrorDiagID(
+                "CrossReference could not open dump file '%0' for "
+                "writing"),
+            DumpPath);
+        return;
+      }
+      if (Format == OutputFormat::DashboardObject)
+        writeDashboardObject(Out);
+      else if (Format == OutputFormat::DashboardColumnar)
+        writeDashboardColumnar(Out);
+      else
+        writeTextDump(Out);
       return;
     }
+
+    std::ostringstream Buffer;
     if (Format == OutputFormat::DashboardObject)
-      writeDashboardObject(Out);
+      writeDashboardObject(Buffer);
     else if (Format == OutputFormat::DashboardColumnar)
-      writeDashboardColumnar(Out);
+      writeDashboardColumnar(Buffer);
     else
-      writeTextDump(Out);
+      writeTextDump(Buffer);
+    writeGzipDump(DumpPath + ".gz", Buffer.str());
   }
 
   std::string DumpPath;
@@ -1619,6 +1890,7 @@ private:
   bool ShowGC = false;
   bool CppDemangle = false;
   bool UseDWARF = false;
+  bool Gzip = false;
   bool CoalesceDirs = false;
   OutputFormat Format = OutputFormat::Text;
   std::string SourceRoot;
@@ -1636,18 +1908,26 @@ private:
   uint64_t MinRefs = 0;
   bool ExcludeIntraFile = false;
   mutable std::unordered_map<std::string, std::string> OutputPathCache;
+  std::unique_ptr<ThreadPool> WorkPool;
+  size_t WorkPoolThreads = 0;
   std::unordered_map<Symbol, uint64_t> IncomingRefCount;
   std::unordered_map<Symbol, Symbol> StubSymbolToTarget;
   std::unordered_set<Chunk> StubChunks;
-  std::unordered_map<Chunk, std::vector<SymbolOffset>> ChunkSymbolsCache;
+  std::unordered_map<Chunk, ChunkSymbolRange> ChunkSymbolsCache;
+  std::vector<SymbolOffset> ChunkSymbolIndex;
   std::unordered_map<Symbol, SourceLoc> SymbolSourceLoc;
   std::vector<XRefEdge> Edges;
   std::vector<Symbol> AllSymbols;
+  std::unordered_map<Symbol, uint32_t> SymbolIDs;
   std::vector<DashboardSection> DashboardSections;
+  std::vector<std::string> DashboardPaths;
+  std::unordered_map<std::string, uint32_t> DashboardPathIDs;
+  std::vector<std::string> DashboardOutputs;
+  std::unordered_map<std::string, uint32_t> DashboardOutputIDs;
   DashboardPathCoalescer DashboardPathCompressor;
   std::unordered_map<Section, Symbol> PrimarySectionSymbols;
   std::unordered_map<Section, uint32_t> DashboardSectionIds;
-  std::map<std::pair<uint32_t, uint32_t>, uint64_t> DashboardEdgeCounts;
+  std::unordered_map<uint64_t, uint64_t> DashboardEdgeCounts;
 };
 
 ELD_REGISTER_PLUGIN(CrossReference)
