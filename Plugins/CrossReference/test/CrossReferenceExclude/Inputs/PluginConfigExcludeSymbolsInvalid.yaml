@@ -1,0 +1,5 @@
+GlobalPlugins:
+  - Type: LinkerPlugin
+    Name: CrossReference
+    Library: CrossReference
+    Options: file=xref_dump.txt:exclude_symbols=[unterminated
