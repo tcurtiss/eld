@@ -1,0 +1,31 @@
+#---CrossReferenceDemangle.test----------------- Executable,LS --------------------#
+#BEGIN_COMMENT
+# Tests the CrossReference's cpp_demangle option: with cpp_demangle=yes,
+# C++ symbol names in the dump are printed demangled (e.g. "ns::bar(int, int)")
+# rather than in their mangled form; by default (cpp_demangle unset), names are
+# printed exactly as they appear in the symbol table, i.e. still mangled.
+#END_COMMENT
+#START_TEST
+RUN: %clangxx %clangxxopts -c %p/Inputs/1.cpp -o %t1.1.o -ffunction-sections
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-MANGLED
+RUN: rm -f xref_dump.txt
+RUN: %link %linkopts %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigDemangle.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-DEMANGLED
+RUN: rm -f xref_dump.txt
+#END_TEST
+
+LINK-NOT: Error
+
+DUMP-MANGLED: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-MANGLED-DAG: [[MFOO:[0-9]+]]{{[[:space:]]}}_ZN2ns3fooEi{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MANGLED-DAG: [[MBAR:[0-9]+]]{{[[:space:]]}}_ZN2ns3barEii{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-MANGLED: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-MANGLED: [[MBAR]]{{[[:space:]]}}[[MFOO]]{{[[:space:]]}}2{{[[:space:]]}}-
+
+DUMP-DEMANGLED: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-DEMANGLED-DAG: [[DFOO:[0-9]+]]{{[[:space:]]}}ns::foo(int){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DEMANGLED-DAG: [[DBAR:[0-9]+]]{{[[:space:]]}}ns::bar(int, int){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-DEMANGLED: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-DEMANGLED: [[DBAR]]{{[[:space:]]}}[[DFOO]]{{[[:space:]]}}2{{[[:space:]]}}-

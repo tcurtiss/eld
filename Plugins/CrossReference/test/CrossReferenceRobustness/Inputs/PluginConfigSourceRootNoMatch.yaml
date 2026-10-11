@@ -1,0 +1,5 @@
+GlobalPlugins:
+  - Type: LinkerPlugin
+    Name: CrossReference
+    Library: CrossReference
+    Options: file=xref_path.json:format=json:source_root=/definitely/not/a/build/root

@@ -1,0 +1,5 @@
+GlobalPlugins:
+  - Type: LinkerPlugin
+    Name: CrossReference
+    Library: CrossReference
+    Options: file=xref_robust.txt:include_symbols=caller*,target*:exclude_symbols=target*:exclude_local=no

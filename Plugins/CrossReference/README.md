@@ -1,0 +1,394 @@
+# CrossReference Linker Plugin
+
+CrossReference builds a reference graph while ELD is linking and writes it to
+an output file. Unlike the linker's traditional `--cref` table, which records
+referencing input files, this plugin attempts to identify the symbol containing
+each individual reference.
+
+The plugin runs from `ActBeforeWritingOutput`, after garbage collection and
+linker-generated stubs/trampolines have been created. It reads ELF input files;
+bitcode/LTO inputs are not inspected.
+
+## Build as part of ELD
+
+Configure ELD/LLVM normally, then build the plugin target:
+
+```sh
+cmake -S /path/to/llvm-project -B build-eld \
+  -DLLVM_ENABLE_PROJECTS=clang
+cmake --build build-eld --target CrossReference
+```
+
+The plugin-local tests are registered with ELD's normal `llvm-lit`
+configuration. They cover text output, both JSON formats, DWARF lookup,
+demangling, filters, garbage collection, gzip output, and multithreaded and
+serial linking paths.
+
+## Build standalone against an installed ELD package
+
+Use the package-only CMake entry point when the full LLVM/ELD source tree is
+not available:
+
+When `ELD_TARGET_CXX` and `ELD_TARGET_LD` are omitted, CMake derives the
+linker path and searches for the target compiler under
+`<ELD_PACKAGE_ROOT>/Tools/bin`. Set them explicitly only when the target
+compiler or linker is installed somewhere other than the ELD package.
+
+```sh
+cmake -S /path/to/eld/Plugins \
+  -B build-crossreference \
+  -DELD_PACKAGE_ROOT=/path/to/target_tools \
+  -DELD_PLUGIN_CXX=/path/to/host-clang++ \
+  -DELD_PLUGIN_USE_LIBCXX=ON \
+  -DELD_PLUGINS=CrossReference
+cmake --build build-crossreference
+```
+
+`ELD_PLUGIN_CXX` is the host Clang compiler used to build the plugin shared
+library. With `ELD_PLUGIN_USE_LIBCXX=ON`, `-stdlib=libc++` is supplied before
+CMake tests that compiler. `ELD_TARGET_CXX` and `ELD_TARGET_LD` are discovered
+automatically under the ELD package's `Tools/bin` directory. Set them
+explicitly only when the target tools are installed elsewhere. Set
+`ELD_TARGET_TRIPLE`,
+`ELD_TARGET_CXX_FLAGS`, and `ELD_TARGET_LD_FLAGS` when the target toolchain
+requires them. Add
+`-DBUILD_TESTING=OFF` to build without target test tools.
+
+### Run the tests with an external `llvm-lit`
+
+The standalone build registers the plugin-local lit suite with CTest. Use an
+`llvm-lit` from the external LLVM package, and provide the target triple so
+the lit configuration can select the corresponding ELD test target:
+
+```sh
+cmake -S /path/to/eld/Plugins \
+  -B build-crossreference \
+  -DELD_PACKAGE_ROOT=/path/to/target_tools \
+  -DELD_PLUGIN_CXX=/path/to/host-clang++ \
+  -DELD_PLUGIN_USE_LIBCXX=ON \
+  -DELD_PLUGINS=CrossReference \
+  -DELD_TARGET_TRIPLE=riscv64-unknown-elf \
+  -DELD_ENABLE_LIT_TESTS=ON \
+  -DELD_LLVM_LIT=/path/to/llvm-package/bin/llvm-lit
+cmake --build build-crossreference
+ctest --test-dir build-crossreference \
+  -R ELDStandaloneLit.CrossReference --output-on-failure
+```
+
+The standalone lit configuration is self-contained; it does not require the
+full ELD source tree or the ELD test harness. The external LLVM tools
+directory must provide `FileCheck` and `not`.
+
+`ELD_TEST_TARGET=RISCV64` may be supplied instead of
+`ELD_TARGET_TRIPLE` when the automatically derived architecture is not the
+one wanted. `ELD_LLVM_LIT` may be omitted when the external `llvm-lit` is on
+`PATH`. The tools and libraries used by the lit suite are inferred from the
+`llvm-lit` location; set `ELD_LLVM_TOOLS_DIR` or `ELD_LLVM_LIBS_DIR` when
+those directories are elsewhere.
+
+The package-only smoke test is kept with this plugin at
+`test/standalone_test.py`. It builds a small target object, runs ELD with
+gzip-compressed JSON output, and verifies the expected symbols and edges.
+It is registered with CTest when `CrossReference` is selected.
+
+The resulting library is under
+`build-crossreference/CrossReference/libCrossReference.so`. When invoking
+`ld.eld` manually, place that directory and the package's `Tools/lib`
+directory in `LD_LIBRARY_PATH` so the plugin loader can find the library and
+its ELD runtime.
+
+## Configuration
+
+The plugin is configured through a colon-delimited `key=value` option string.
+The `file` option is required.
+
+```yaml
+GlobalPlugins:
+  - Type: LinkerPlugin
+    Name: CrossReference
+    Library: CrossReference
+    Options: file=xref.txt:format=text:cpp_demangle=yes
+```
+
+The supported options are:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `file=<path>` | required | Output file. Existing contents are replaced. |
+| `format=text\|json\|json_columnar` | `text` | Selects the output format. |
+| `gzip=yes\|no` | `no` | Compresses the selected output format as gzip and appends `.gz` to the output path. |
+| `source_root=<path>` | unset | Removes this complete path prefix from object-file paths, DWARF paths, and dashboard paths. |
+| `strip_prefix=<glob>` | unset | Removes the longest complete path prefix matching an LLVM glob. Mutually exclusive with `source_root`. |
+| `coalesce_dirs=none\|unary` | `none` | In JSON formats, folds empty single-child directory chains after the first two path components. |
+| `show_gc=yes\|no` | `no` | Includes garbage-collected symbols and edges in text output. |
+| `cpp_demangle=yes\|no` | `no` | Demangles C++ names in output and name-pattern matching. |
+| `usedwarf=yes\|no` | `no` | Looks up function and variable declaration locations in DWARF. |
+| `exclude_symbols=<globs>` | unset | Comma-delimited name patterns. Matching symbols and their edges are omitted. |
+| `exclude_files=<globs>` | unset | Comma-delimited patterns matched against resolved object-file paths. |
+| `include_symbols=<globs>` | unset | If present, only symbols matching at least one pattern are retained. |
+| `exclude_local=yes\|no` | `yes` | Omits local symbols, including static functions/data and generated labels. |
+| `exclude_functions=yes\|no` | `no` | Omits `STT_FUNC` symbols and their edges. |
+| `exclude_data=yes\|no` | `no` | Omits `STT_OBJECT` symbols and their edges. |
+| `min_size=<bytes>` | `0` | Omits symbols smaller than this size and their edges. |
+| `min_refs=<n>` | `0` | Omits symbols with fewer than this many incoming references and their edges. |
+| `exclude_intra_file=yes\|no` | `no` | Omits edges whose caller and target have the same resolved input-file path. |
+
+`yes`/`no` values are case-sensitive. Unknown options, duplicate `file`
+options, malformed numbers or globs, missing `file`, and simultaneous
+`source_root`/`strip_prefix` options are errors.
+
+When `gzip=yes`, the plugin writes the serialized text or JSON output to
+`<file>.gz`; the uncompressed file is not created. This applies to all three
+output formats. For example, `file=xref.json:format=json:gzip=yes` writes
+`xref.json.gz`.
+
+### Path cleanup
+
+`source_root` removes only a complete path component. For example,
+`source_root=/build` removes `/build/` from `/build/project/a.o`, but does not
+alter `/builder/project/a.o`. `source_root=/` removes a leading slash.
+
+`strip_prefix` treats the value as an LLVM glob and tries path-component
+prefixes, retaining the longest matching prefix. For example,
+`strip_prefix=*/build/*` can remove a variable build-root prefix. The cleanup
+is applied consistently to object paths, DWARF source paths, dashboard paths,
+file-filter matching, and intra-file comparisons.
+
+`coalesce_dirs=unary` is applied only to dashboard JSON paths. It preserves the
+first two directory components, then folds a directory when it has no object
+file directly beneath it and exactly one child directory. Folded components
+are joined with `⟫`, so a path such as `modem_proc/core/a/b/c.o` may be emitted
+as `modem_proc/core/a⟫b/c.o`. The JSON root also contains
+`"coalesce_dirs":"unary"` so consumers can identify the display-oriented
+path mode. Text output is unchanged.
+
+### Filtering
+
+Name patterns match the demangled name when `cpp_demangle=yes`, otherwise the
+raw symbol-table name. A symbol is retained only if it passes all applicable
+filters: it must satisfy `include_symbols` when specified, match no exclusion
+pattern, not be excluded by its file, binding, type, size, or reference count.
+Filtered symbols are also removed from text edges.
+
+`min_refs` counts individual recorded relocations targeting a symbol, not the
+number of distinct callers. The count is computed from the complete graph
+before the other text filters are applied.
+
+`exclude_intra_file` affects only text edges; both symbols remain in the symbol
+catalog. An unattributed edge has no caller and is not considered intra-file.
+
+The dashboard JSON formats are section-oriented and intentionally do not apply
+the symbol filters, `show_gc`, or `exclude_intra_file`. They contain the
+section graph independently of the text dump filters. `cpp_demangle` and path
+cleanup still affect dashboard names and paths.
+
+## Parallel work
+
+When ELD is multithreaded, the plugin uses the Plugin API thread pool for
+independent input-file work: symbol collection, dashboard section discovery,
+relocation/reference walking, and per-file DWARF indexing. Stub discovery and
+per-chunk symbol sorting are also partitioned into independent tasks. The pool
+is reused across phases and uses a bounded number of worker tasks that claim
+work dynamically, which avoids creating one scheduler task per input item.
+Each worker builds private results, which are merged deterministically, so text
+and JSON output remains stable. With `--no-threads` (or a single configured
+thread), the same code executes directly without creating a worker pool.
+
+The plugin also avoids symbol-level attribution and DWARF indexing when a JSON
+format is selected, because those formats contain the section-level graph only.
+Repeated references are aggregated while they are walked, and repeated
+dashboard file paths and output-section names are interned. JSON serializers
+stream directly to the output stream; gzip output avoids an additional complete
+copy of the compressed payload. Text edge aggregation uses compact integer IDs,
+and the referrer index is stored as one contiguous symbol array with per-chunk
+ranges instead of one separately allocated vector per chunk. When DWARF is
+enabled, only names belonging to symbols that survive text filters are indexed.
+
+The plugin records timers for each major phase. They are visible when ELD
+timing statistics are enabled, for example with `--emit-timing-stats` and an
+appropriate `--time-region` selection.
+
+## Reference graph construction
+
+For every usable relocation/`Use`, the plugin identifies the source chunk and
+the target symbol. The source reference is attributed as follows:
+
+1. If the relocation offset is within a symbol's
+   `[symbol_offset, symbol_offset + symbol_size)` range, the attribution is
+   exact.
+2. Otherwise, the nearest preceding symbol in the same chunk is selected and
+   marked approximate. This handles symbols with missing or unreliable size
+   information, such as hand-written assembly without `.size` directives.
+3. For a relocation in a non-code section, if no preceding symbol exists but
+   the section has a primary object symbol, that data symbol is used and the
+   reference is marked approximate. This covers data structures such as
+   vtables whose relocation can precede the symbol's recorded range.
+4. If no usable source symbol exists, the reference is unattributed.
+
+Every relocation contributes one reference. Repeated references between the
+same endpoints are aggregated and reported with a count.
+
+References through linker-generated branch-island/stub symbols are rewritten to
+the real target and receive the `trampoline` flag. The synthetic stub itself is
+not reported as an intermediate edge.
+
+The plugin does not require `-ffunction-sections` or `-fdata-sections` for the
+symbol-level text graph. Those options are useful when the dashboard's
+input-section nodes should correspond closely to individual function and data
+symbols.
+
+Garbage-collected sections are still scanned so the pre-GC connectivity graph
+can be recovered. In text output, they are omitted by default. With
+`show_gc=yes`, they are included and their address is printed as `?` because
+they never received a final address. Dashboard JSON always retains dead input
+sections and marks them as not live.
+
+## Text output schema
+
+The text format is tab-delimited and contains a symbol catalog followed by an
+edge table. The header comments are also a legend:
+
+```text
+# Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t<output-section>
+#   '?' address means garbage-collected; section is the linked output section.
+#   with usedwarf=yes, source appears after the name as (file:line).
+<id>\t<name>\t<object-file>\t0x<size>\t<address>\t<output-section>
+
+# Edges: <src-id>\t<dst-id>\t<count>\t<flags>
+#   '-' source means unattributed; '-' flags means none; flags: approx, unattributed, trampoline.
+<src-id>\t<dst-id>\t<count>\t<flags>
+```
+
+Symbol IDs are local to the dump. The symbol name may be followed by
+`(source-file:line)` when DWARF lookup succeeds. A `-` source ID denotes an
+unattributed reference. Multiple flags are comma-delimited; flags are combined
+when references aggregate into the same edge.
+
+Example:
+
+```text
+# Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t<output-section>
+#   '?' address means garbage-collected; section is the linked output section.
+#   with usedwarf=yes, source appears after the name as (file:line).
+0\tmain\tapp.o\t0x20\t0x1000\t.text
+1\tfoo\tlib.o\t0x10\t0x1020\t.text
+# Edges: <src-id>\t<dst-id>\t<count>\t<flags>
+#   '-' source means unattributed; '-' flags means none; flags: approx, unattributed, trampoline.
+0\t1\t2\t-
+```
+
+## Dashboard object JSON (`format=json`)
+
+This format contains one node for each allocatable, non-discarded ELF input
+section. If a section has a suitable function or object symbol, that symbol is
+used as the node name; otherwise the input section name is used.
+
+When enabled, the JSON root also contains `"coalesce_dirs":"unary"`. Node
+`path` values use `⟫` inside a directory component to show folded path levels.
+
+```json
+{
+  "nodes": [
+    {
+      "id": 0,
+      "name": "main",
+      "path": "app.o",
+      "kind": "code",
+      "size": 32,
+      "out": ".text"
+    },
+    {
+      "id": 1,
+      "name": "constants",
+      "path": "data.o",
+      "kind": "rodata",
+      "size": 16,
+      "live": false
+    }
+  ],
+  "edges": [
+    {"src": 0, "dst": 1, "count": 2}
+  ]
+}
+```
+
+Node fields:
+
+- `id`: numeric node ID.
+- `name`: primary symbol name or input-section name.
+- `path`: cleaned input object-file path.
+- `kind`: one of `code`, `rodata`, `data`, or `bss`.
+- `size`: input-section size in bytes.
+- `out`: linked output-section name, when available.
+- `live`: present as `false` for garbage-collected sections; omitted for live sections.
+- `root`: present as `true` for live sections retained by a linker-script `KEEP` rule.
+
+Each JSON edge contains `src`, `dst`, and `count`. It represents aggregated
+references between two different input sections. Section-level edges include
+dead sections and are independent of text symbol filtering.
+
+## Dashboard columnar JSON (`format=json_columnar`)
+
+The columnar format has this top-level shape:
+
+```json
+{
+  "format": "fia-columnar",
+  "version": 1,
+  "strings": {
+    "dirs": [[-1, "build"], [0, "src"]],
+    "files": [[1, "app.o"]],
+    "outs": [".text"]
+  },
+  "sections": {
+    "count": 1,
+    "size": [32],
+    "file": [0],
+    "out": [0],
+    "kind": [0],
+    "flags": [0],
+    "name": ["main"]
+  },
+  "refs": {
+    "offsets": [0, 0],
+    "targets": [],
+    "counts": []
+  }
+}
+```
+
+With `coalesce_dirs=unary`, the top-level object additionally contains
+`"coalesce_dirs":"unary"`, and folded directory components in
+`strings.dirs` use `⟫` between their original names.
+
+`strings.dirs` contains `[parent_directory_id, name]` entries, with `-1`
+meaning no parent. `strings.files` contains `[directory_id, basename]` entries.
+`strings.outs` is the output-section string table.
+
+The arrays in `sections` are parallel and indexed by section ID:
+
+- `count`: number of sections.
+- `size`: section sizes in bytes.
+- `file`: IDs into `strings.files`.
+- `out`: IDs into `strings.outs`; `-1` means no output-section name.
+- `kind`: numeric kind, `0=code`, `1=rodata`, `2=data`, `3=bss`.
+- `flags`: bit mask: bit `0x1` means dead/not live; bit `0x2` means linker-script root.
+- `name`: node names.
+
+The `refs` arrays use compressed sparse-row adjacency. For source section `i`,
+the entries from `offsets[i]` through `offsets[i+1]` refer to target IDs in
+`targets` and matching reference counts in `counts`. `offsets` therefore has
+`sections.count + 1` entries.
+
+## DWARF source locations
+
+With `usedwarf=yes`, the plugin indexes both `DW_TAG_subprogram` and
+`DW_TAG_variable` DIEs. In the current implementation, source locations are
+printed in text symbols as `(file:line)`; the dashboard JSON formats do not
+emit source-location fields.
+
+DWARF is read directly from each input file's unrelocated bytes. Debug strings
+stored through relocated forms such as `DW_FORM_strp` or `DW_FORM_strx` may not
+resolve correctly because non-allocatable debug-section relocations are not
+applied by the plugin API. Using inline debug strings, for example
+`-gdwarf-2 -mllvm -dwarf-inlined-strings=Enable`, avoids that limitation.

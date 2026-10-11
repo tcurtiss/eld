@@ -1,0 +1,110 @@
+#---ReassignSectionAddresses.test---------------- Executable,LS ----------------#
+#BEGIN_COMMENT
+# Tests the ReassignSectionAddresses OutputSectionIteratorPlugin.  The plugin
+# assigns absolute addresses to data/object symbols in DSECT output sections.
+# The cases cover sequential assignment, cross-section duplicate reuse, MD5
+# and SHA1 hashing, dump generation, tracing, missing sections, and malformed
+# options.  Function symbols are deliberately outside the target sections:
+# setSymbolAddress is only valid for object/data symbols.
+#END_COMMENT
+#START_TEST
+RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.data.o -fdata-sections
+
+# Sequential mode: first unique content gets 0x100, duplicate content reuses
+# that address, and the sequence continues across both target sections.
+RUN: rm -f reassign_a.dump reassign_b.dump
+RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.sequential.out --plugin-config %p/Inputs/PluginConfigSequential.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=SEQUENTIAL-TRACE
+RUN: %filecheck < reassign_a.dump %s --check-prefix=SEQUENTIAL-A
+RUN: %filecheck < reassign_b.dump %s --check-prefix=SEQUENTIAL-B
+RUN: %filecheck < reassign_a_debug.dump %s --check-prefix=SEQUENTIAL-DEBUG-A
+RUN: %filecheck < reassign_b_debug.dump %s --check-prefix=SEQUENTIAL-DEBUG-B
+# Repeat sequential mode with the linker thread pool disabled to cover the
+# direct, non-preprocessing path as well.
+RUN: rm -f reassign_a.dump reassign_b.dump
+RUN: %link --no-threads --emit-relocs %t.data.o -T %p/Inputs/script.t -e main -o %t.sequential-serial.out --plugin-config %p/Inputs/PluginConfigSequential.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
+RUN: %filecheck < reassign_a.dump %s --check-prefix=SEQUENTIAL-A
+RUN: %filecheck < reassign_b.dump %s --check-prefix=SEQUENTIAL-B
+
+# MD5 mode uses the full symbol bytes, including the compiler-provided NUL.
+RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.md5.out --plugin-config %p/Inputs/PluginConfigMD5.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
+RUN: %readelf -s %t.md5.out | %filecheck %s --check-prefix=MD5-SYMBOLS
+
+# Unknown hash values fall back to the default MD5 mode; unknown and malformed
+# option fields are ignored with tracing enabled.
+RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.unknown-options.out --plugin-config %p/Inputs/PluginConfigUnknownOptions.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=UNKNOWN-OPTIONS --allow-empty
+
+# SHA1 mode also exercises dump generation and duplicate-address suppression.
+RUN: rm -f reassign_sha1.dump
+RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.sha1.out --plugin-config %p/Inputs/PluginConfigSHA1.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
+RUN: %filecheck < reassign_sha1.dump %s --check-prefix=SHA1-DUMP
+
+# gzip=yes appends .gz and leaves the requested uncompressed path absent.
+RUN: rm -f reassign_gzip.dump reassign_gzip.dump.gz
+RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.gzip.out --plugin-config %p/Inputs/PluginConfigGzip.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=GZIP-TRACE
+RUN: test ! -e reassign_gzip.dump
+RUN: %python -c "import gzip; print(gzip.open('reassign_gzip.dump.gz','rt').read(), end='')" | %filecheck %s --check-prefix=GZIP-DUMP
+
+# A configured section that is not present is a successful no-op.
+RUN: rm -f missing.dump
+RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.missing.out --plugin-config %p/Inputs/PluginConfigMissingSection.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=MISSING-SECTION
+RUN: test ! -e missing.dump
+
+# Init-time validation errors.
+RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.no-section.out --plugin-config %p/Inputs/PluginConfigNoSection.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=NO-SECTION
+RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.dump-mismatch.out --plugin-config %p/Inputs/PluginConfigDumpMismatch.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=DUMP-MISMATCH
+RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.invalid-gzip.out --plugin-config %p/Inputs/PluginConfigInvalidGzip.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=INVALID-GZIP
+#END_TEST
+
+SUCCESS-NOT: Error
+
+SEQUENTIAL-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a,.reassign_b, hash=sequential, start=0x100, dump=reassign_a.dump,reassign_b.dump
+SEQUENTIAL-TRACE: [ReassignSectionAddresses] Run (AfterLayout): assigning addresses to symbols in '.reassign_a'
+SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'same_a' -> 0x100
+SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'other_a' -> 0x101
+SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'same_a_duplicate' -> 0x100
+SEQUENTIAL-TRACE: [ReassignSectionAddresses] Run (AfterLayout): assigning addresses to symbols in '.reassign_b'
+SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'same_b' -> 0x100
+SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'third_b' -> 0x102
+
+SEQUENTIAL-A: 00000100:same
+SEQUENTIAL-A: 00000101:other
+SEQUENTIAL-A-NOT: same_a_duplicate
+SEQUENTIAL-A-NOT: 00000102
+SEQUENTIAL-B: 00000100:same
+SEQUENTIAL-B: 00000102:third
+
+SEQUENTIAL-DEBUG-A: 00000100:0:same_a:73616d6500
+SEQUENTIAL-DEBUG-A: 00000101:5:other_a:6f7468657200
+SEQUENTIAL-DEBUG-A: 00000100:b:same_a_duplicate:73616d6500
+SEQUENTIAL-DEBUG-B: 00000100:0:same_b:73616d6500
+SEQUENTIAL-DEBUG-B: 00000102:5:third_b:746869726400
+
+# The exact digest values are checked through the symbol table.  The same
+# bytes must receive the same MD5 address in both symbols.
+MD5-SYMBOLS: {{.*}}863425c2{{.*}}other_a
+MD5-SYMBOLS: {{.*}}ccab33c7{{.*}}same_a
+MD5-SYMBOLS: {{.*}}ccab33c7{{.*}}same_a_duplicate
+
+SHA1-DUMP: a47ad810:same
+SHA1-DUMP: 35bb3c79:other
+SHA1-DUMP-NOT: same_a_duplicate
+
+GZIP-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a, hash=sequential, start=0x100, dump=reassign_gzip.dump, gzip=yes
+GZIP-DUMP: 00000100:same
+GZIP-DUMP: 00000101:other
+GZIP-DUMP-NOT: same_a_duplicate
+
+MISSING-SECTION: [ReassignSectionAddresses] Run: no target output section found, nothing to do
+
+UNKNOWN-OPTIONS: [ReassignSectionAddresses] Init: unknown hash 'unknown', defaulting to md5
+UNKNOWN-OPTIONS: [ReassignSectionAddresses] Init: ignoring unknown option key 'unknown'
+UNKNOWN-OPTIONS: [ReassignSectionAddresses] Init: ignoring malformed option field 'malformed'
+
+NO-SECTION: Fatal: Linking had errors
+NO-SECTION: [ReassignSectionAddresses] Init: section= is required and must specify at least one target output section
+
+DUMP-MISMATCH: Fatal: Linking had errors
+DUMP-MISMATCH: [ReassignSectionAddresses] Init: dump= must specify exactly one path per target section (2 section(s), 1 dump path(s) given)
+
+INVALID-GZIP: Fatal: Linking had errors
+INVALID-GZIP: [ReassignSectionAddresses] Init: gzip= must be 'yes' or 'no'
