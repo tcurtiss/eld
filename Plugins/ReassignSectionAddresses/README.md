@@ -11,7 +11,8 @@ their pre-assignment addresses.
 
 ## Options
 
-Options are colon-delimited `key=value` pairs:
+Options are colon-delimited `key=value` pairs. When an option accepts more
+than one value, its value list remains comma-delimited:
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -20,6 +21,8 @@ Options are colon-delimited `key=value` pairs:
 | `start=<value>` | `0` | Starting address for `hash=sequential`; accepts C integer syntax. |
 | `dump=<path>[,<path>...]` | unset | Optional text dump, one path per target section. |
 | `gzip=yes\|no` | `no` | Writes dump files as `<path>.gz` and does not create the uncompressed file. |
+| `debug_dump=yes\|no` | `no` | Writes an uncompressed parallel `<path>_debug<ext>` dump with each symbol's assigned/original address, name, and raw bytes. Requires `dump=`. |
+| `clean_strings=yes\|no` | `no` | In the main dump only, retains printable ASCII, removes CR/LF, and converts each run of tabs to one space. |
 
 Example plugin configuration:
 
@@ -28,7 +31,7 @@ GlobalPlugins:
   - Type: OutputSectionIteratorPlugin
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.dedup,hash=md5,dump=dedup.dump,gzip=no
+    Options: section=.dedup:hash=md5:dump=dedup.dump:gzip=no
 ```
 
 In sequential mode, identical symbol contents share one address across all
@@ -42,9 +45,13 @@ Dump lines have the form:
 <8-digit-lowercase-hex-address>:<symbol-content>
 ```
 
-Duplicate addresses are written once per dump. With plugin tracing enabled, a
-temporary debug dump may also show each symbol, its original address, and raw
-bytes.
+Duplicate addresses are written once per dump. Set `debug_dump=yes` to also
+write a parallel debug dump with every symbol, its original address, and raw
+bytes; linker tracing is not required.
+
+Set `clean_strings=yes` when dump content may contain terminal control
+characters or non-ASCII bytes. It affects only the human-readable main dump;
+the debug dump continues to record the original bytes as hexadecimal.
 
 ## Build as part of ELD
 

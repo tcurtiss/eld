@@ -1,0 +1,5 @@
+GlobalPlugins:
+  - Type: OutputSectionIterator
+    Name: ReassignSectionAddresses
+    Library: ReassignSectionAddresses
+    Options: section=.reassign_clean:hash=sequential:start=0x100:dump=reassign_clean.dump:clean_strings=yes

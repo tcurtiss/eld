@@ -17,4 +17,7 @@ const char same_b[] = "same";
 __attribute__((section(".reassign_b"), used))
 const char third_b[] = "third";
 
+__attribute__((section(".reassign_clean"), used)) const char messy_string[] =
+    "A\t\tB\nC\rD\001\200";
+
 int main(void) { return 0; }
