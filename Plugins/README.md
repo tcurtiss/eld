@@ -25,13 +25,13 @@ ctest --test-dir build-plugins --output-on-failure
 Build a single plugin or a subset with `ELD_PLUGINS`:
 
 ```sh
-cmake -S /path/to/eld/Plugins -B build-crossreference \
+cmake -S /path/to/eld/Plugins -B build-helloworld \
   -DELD_PACKAGE_ROOT=/path/to/target_tools \
   -DELD_PLUGIN_CXX=/path/to/host-clang++ \
   -DELD_PLUGIN_USE_LIBCXX=ON \
-  -DELD_PLUGINS=CrossReference
-cmake --build build-crossreference
-ctest --test-dir build-crossreference --output-on-failure
+  -DELD_PLUGINS=HelloWorldPlugin
+cmake --build build-helloworld
+ctest --test-dir build-helloworld --output-on-failure
 ```
 
 `ELD_PACKAGE_ROOT` is the directory containing the installed `Tools`
@@ -53,8 +53,7 @@ be used instead. Use a fresh build directory when changing the host compiler
 or this runtime selection.
 
 `ELD_PLUGINS` is a CMake semicolon-separated list. Quote it when selecting
-more than one plugin from a shell, for example
-`-DELD_PLUGINS='HelloWorldPlugin;CrossReference'`.
+more than one plugin from a shell.
 
 When plugin lit tests are enabled, the lit architecture is derived from
 `ELD_TARGET_TRIPLE`. For example, `riscv64-unknown-elf` selects
@@ -77,7 +76,7 @@ cmake -S /path/to/eld/Plugins -B build-plugins \
   -DELD_TARGET_TRIPLE=riscv64-unknown-elf \
   -DELD_ENABLE_LIT_TESTS=ON \
   -DELD_LLVM_LIT=/path/to/llvm-package/bin/llvm-lit \
-  -DELD_PLUGINS=CrossReference
+  -DELD_PLUGINS=HelloWorldPlugin
 cmake --build build-plugins
 ctest --test-dir build-plugins -R ELDStandaloneLit --output-on-failure
 ```
@@ -91,8 +90,4 @@ when those locations are separate. The external tools directory must provide
 symbols.
 
 Each plugin's README documents its standalone behavior and its plugin-local
-standalone smoke test. The ReassignSectionAddresses plugin additionally
-requires an installed ELD package exposing `LinkerWrapper::setSymbolAddress`.
-Consequently, an older package can build HelloWorldPlugin and CrossReference
-by selecting them explicitly, but the default all-plugin build will reject
-ReassignSectionAddresses until that API is available.
+standalone smoke test.

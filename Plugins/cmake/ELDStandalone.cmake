@@ -276,10 +276,7 @@ function(eld_standalone_setup_tests)
         "LLVM libraries directory used by standalone plugin lit tests" FORCE)
     endif()
 
-    set(_eld_required_lit_tools FileCheck not)
-    if(ReassignSectionAddresses IN_LIST ELD_PLUGINS)
-      list(APPEND _eld_required_lit_tools llvm-readelf)
-    endif()
+    set(_eld_required_lit_tools FileCheck not llvm-readelf)
     foreach(_tool IN LISTS _eld_required_lit_tools)
       find_program(_eld_lit_tool_path NAMES "${_tool}"
         PATHS "${ELD_LLVM_TOOLS_DIR}" NO_DEFAULT_PATH)
@@ -310,8 +307,11 @@ function(eld_add_standalone_test)
       --target-cxx "${ELD_TARGET_CXX}"
       --target-ld "${ELD_TARGET_LD}"
       --target-triple "${ELD_TARGET_TRIPLE}"
-      --target-cxx-flags "${ELD_TARGET_CXX_FLAGS}"
-      --target-ld-flags "${ELD_TARGET_LD_FLAGS}")
+      # Use the --option=value spelling so a flag value that begins with '-'
+      # (for example, -G0 for Hexagon) is not interpreted as another Python
+      # argparse option.
+      "--target-cxx-flags=${ELD_TARGET_CXX_FLAGS}"
+      "--target-ld-flags=${ELD_TARGET_LD_FLAGS}")
 endfunction()
 
 function(eld_add_standalone_lit_test)
