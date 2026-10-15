@@ -92,21 +92,16 @@ class DLL_A_EXPORT ReassignSectionAddresses
 public:
   enum class HashKind { MD5, SHA1, Sequential };
 
-  // DEBUG ONLY: when true, and only for sections that already have a main
-  // dump= file configured, also writes a second, parallel
+  // When debug_dump=yes, and only for sections that already have a main dump=
+  // file configured, also writes a second, parallel
   // "<path>_debug<ext>" file with one line per symbol (not deduplicated by
   // address, unlike the main dump, so every symbol's own original address
   // is visible even when several symbols share a reassigned address) of the
   // form "<hex hash>:<original address>:<symbol name>:<hex bytes>", where
   // <hex bytes> is a lowercase hex encoding of the symbol's raw content
   // bytes (two hex digits per byte, untrimmed) rather than a string
-  // rendering of them. This is temporary tooling for diagnosing address
-  // reassignment during development; flip to false to disable. Also gated
-  // at the call site on Run()'s Trace flag, so it's off by default even
-  // while this is true; enable it for just this plugin with
-  // --trace=plugin=ReassignSectionAddresses. Not covered by the lit test,
-  // since it is expected to be disabled/removed later.
-  static constexpr bool EnableDebugAddressDump = true;
+  // rendering of them. The dump is controlled solely by the plugin option,
+  // rather than the linker's tracing state.
 
   ReassignSectionAddresses()
       : OutputSectionIteratorPlugin("ReassignSectionAddresses") {}
@@ -144,6 +139,16 @@ public:
   //                     dump file is written for any section.
   //   gzip=<yes|no>      When yes, write each dump as <path>.gz using gzip;
   //                     the uncompressed path is not created (default no).
+  //   debug_dump=<yes|no>
+  //                     When yes, write an uncompressed parallel
+  //                     <path>_debug<ext> dump containing every symbol's
+  //                     assigned address, original address, name, and raw
+  //                     bytes (default no). Requires dump=.
+  //   clean_strings=<yes|no>
+  //                     When yes, clean content printed in the main dump:
+  //                     retain printable ASCII only, remove CR/LF, and
+  //                     replace each run of tabs with one space (default no).
+  //                     The debug dump always retains raw bytes as hex.
   void Init(std::string Options) override {
     // Init() may be called more than once on the same plugin instance (the
     // linker's plugin-loading path can invoke it in addition to the
@@ -153,6 +158,8 @@ public:
     SectionIndex.clear();
     DumpPaths.clear();
     Gzip = false;
+    DebugDump = false;
+    CleanStrings = false;
     EC = 0;
     LastError = "Success";
 
@@ -195,6 +202,24 @@ public:
           if (!parseYesNo(Value, Gzip)) {
             EC = 1;
             LastError = "gzip= must be 'yes' or 'no'";
+            if (pluginTrace())
+              std::cout << "[ReassignSectionAddresses] Init: " << LastError
+                        << "\n";
+            return;
+          }
+        } else if (Key == "debug_dump") {
+          if (!parseYesNo(Value, DebugDump)) {
+            EC = 1;
+            LastError = "debug_dump= must be 'yes' or 'no'";
+            if (pluginTrace())
+              std::cout << "[ReassignSectionAddresses] Init: " << LastError
+                        << "\n";
+            return;
+          }
+        } else if (Key == "clean_strings") {
+          if (!parseYesNo(Value, CleanStrings)) {
+            EC = 1;
+            LastError = "clean_strings= must be 'yes' or 'no'";
             if (pluginTrace())
               std::cout << "[ReassignSectionAddresses] Init: " << LastError
                         << "\n";
@@ -243,6 +268,14 @@ public:
       DumpPaths.assign(TargetSections.size(), std::string());
     }
 
+    if (DebugDump && !SawDump) {
+      EC = 1;
+      LastError = "debug_dump=yes requires dump=";
+      if (pluginTrace())
+        std::cout << "[ReassignSectionAddresses] Init: " << LastError << "\n";
+      return;
+    }
+
     if (!pluginTrace())
       return;
     std::cout << "[ReassignSectionAddresses] Init: target section(s)=";
@@ -261,7 +294,9 @@ public:
       for (size_t I = 0; I < DumpPaths.size(); ++I)
         std::cout << (I ? "," : "") << DumpPaths[I];
     }
-    std::cout << ", gzip=" << (Gzip ? "yes" : "no");
+    std::cout << ", gzip=" << (Gzip ? "yes" : "no")
+              << ", debug_dump=" << (DebugDump ? "yes" : "no")
+              << ", clean_strings=" << (CleanStrings ? "yes" : "no");
     std::cout << "\n";
   }
 
@@ -325,13 +360,7 @@ public:
             DumpOut = &DumpFile;
           }
         }
-        // DEBUG ONLY: also requires Trace (the same flag already gating
-        // this plugin's other Run() diagnostics), so the debug dump is off
-        // by default even with EnableDebugAddressDump set to true. Enable
-        // it for just this plugin with
-        // --trace=plugin=ReassignSectionAddresses.
-        const bool WriteDebugDump =
-            EnableDebugAddressDump && Trace && !DumpPath.empty();
+        const bool WriteDebugDump = DebugDump && !DumpPath.empty();
         std::ofstream DebugDumpFile;
         std::string DebugDumpPath;
         if (WriteDebugDump) {
@@ -368,8 +397,7 @@ public:
           if (!DumpPath.empty() && DumpedAddrs.insert(Addr).second) {
             *DumpOut << std::hex << std::setfill('0') << std::setw(8) << Addr
                      << std::dec << ":";
-            if (ContentSize)
-              DumpOut->write(ContentData, ContentSize);
+            writeDumpContent(*DumpOut, ContentData, ContentSize);
             *DumpOut << "\n";
           }
           // DEBUG ONLY: one line per symbol (not deduplicated by address,
@@ -565,6 +593,32 @@ private:
     }
   }
 
+  void writeDumpContent(std::ostream &Out, const char *ContentData,
+                        uint32_t ContentSize) const {
+    if (!ContentData || !ContentSize)
+      return;
+    if (!CleanStrings) {
+      Out.write(ContentData, ContentSize);
+      return;
+    }
+
+    bool PreviousWasTab = false;
+    for (uint32_t I = 0; I < ContentSize; ++I) {
+      unsigned char Byte = static_cast<unsigned char>(ContentData[I]);
+      if (Byte == '\r' || Byte == '\n')
+        continue;
+      if (Byte == '\t') {
+        if (!PreviousWasTab)
+          Out.put(' ');
+        PreviousWasTab = true;
+        continue;
+      }
+      PreviousWasTab = false;
+      if (Byte >= 0x20 && Byte <= 0x7e)
+        Out.put(static_cast<char>(Byte));
+    }
+  }
+
   // DEBUG ONLY: inserts "_debug" before Path's extension (or appends it if
   // Path has no extension), e.g. "foo.txt" -> "foo_debug.txt".
   static std::string makeDebugDumpPath(const std::string &Path) {
@@ -589,6 +643,8 @@ private:
   HashKind Hash = HashKind::MD5;
   std::vector<std::string> DumpPaths;
   bool Gzip = false;
+  bool DebugDump = false;
+  bool CleanStrings = false;
   uint32_t NextSequentialAddr = 0;
   uint32_t EC = 0;
   std::string LastError = "Success";
