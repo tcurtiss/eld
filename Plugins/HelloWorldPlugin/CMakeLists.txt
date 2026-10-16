@@ -17,4 +17,12 @@ endif()
 
 if(NOT ELD_STANDALONE)
   eld_register_plugin_tests(${CMAKE_CURRENT_SOURCE_DIR}/test HelloWorldPlugin)
+else()
+  eld_add_standalone_test(
+    NAME HelloWorldPlugin
+    TARGET HelloWorldPlugin
+    SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/test/standalone_test.py")
+  eld_add_standalone_lit_test(
+    NAME HelloWorldPlugin
+    TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test")
 endif()
