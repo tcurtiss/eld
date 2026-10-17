@@ -1,5 +1,34 @@
 cmake_minimum_required(VERSION 3.20)
 
+option(BUILD_STANDALONE_PLUGINS
+  "Build plugins against an installed ELD package instead of in-tree ELD" OFF)
+
+if(BUILD_STANDALONE_PLUGINS)
+  if(TARGET LW)
+    message(FATAL_ERROR
+      "BUILD_STANDALONE_PLUGINS is for a separate plugin build, not an ELD build")
+  endif()
+  # Use CMAKE_CXX_COMPILER and CMAKE_CXX_FLAGS (or a host toolchain file).
+  # In particular, libc++ must be selected before project() tests the compiler.
+  project(ELDStandalonePlugins LANGUAGES CXX)
+  list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+  find_package(ELD REQUIRED MODULE)
+  include(ELDStandalone)
+  option(BUILD_TESTING "Enable standalone plugin tests" OFF)
+  option(ELD_ENABLE_LIT_TESTS "Register standalone plugin lit tests" OFF)
+  if(ELD_ENABLE_LIT_TESTS AND NOT BUILD_TESTING)
+    message(FATAL_ERROR "ELD_ENABLE_LIT_TESTS requires BUILD_TESTING=ON")
+  endif()
+  include(CTest)
+  if(BUILD_TESTING)
+    include(ELDStandaloneTests)
+  endif()
+elseif(NOT TARGET LW)
+  message(FATAL_ERROR
+    "For a package-based plugin build, pass -DBUILD_STANDALONE_PLUGINS=ON")
+endif()
+set(ELD_STANDALONE ${BUILD_STANDALONE_PLUGINS})
+
 # A plugin is an immediate child directory containing its own CMakeLists.txt.
 # CONFIGURE_DEPENDS makes CMake re-run configuration when a plugin directory is
 # added or removed. Infrastructure directories are explicitly excluded.
@@ -29,26 +58,12 @@ if(NOT _eld_all_plugins)
 endif()
 message(STATUS "Discovered ELD plugins: ${_eld_all_plugins}")
 
-# When Plugins is the source directory, this is a package-only standalone
-# project. When it is added by the ELD build, the parent project has already
-# selected the compiler and configured the ELD libraries.
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ELDStandalone.cmake")
-  eld_standalone_prepare_compiler()
-  project(ELDStandalonePlugins LANGUAGES CXX)
-
-  set(ELD_STANDALONE ON)
+if(ELD_STANDALONE)
   set(ELD_PLUGINS "${_eld_all_plugins}" CACHE STRING
     "Semicolon-separated plugins to build")
-  eld_standalone_setup()
-  eld_standalone_resolve_test_target()
-  include(CTest)
-  eld_standalone_setup_tests()
 else()
-  # The normal ELD build includes every plugin. Standalone selection is only
-  # meaningful when this directory is configured as the source tree.
+  # The normal ELD build includes every plugin.
   set(ELD_PLUGINS "${_eld_all_plugins}")
-  find_package(ZLIB REQUIRED)
 endif()
 
 foreach(_plugin IN LISTS ELD_PLUGINS)
@@ -56,10 +71,10 @@ foreach(_plugin IN LISTS ELD_PLUGINS)
     message(FATAL_ERROR
       "Unknown ELD plugin '${_plugin}'. Known plugins: ${_eld_all_plugins}")
   endif()
-  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/${_plugin}")
+  add_subdirectory("${_plugin}")
 endforeach()
 
 if(ELD_STANDALONE)
-  message(STATUS "ELD package: ${ELD_PACKAGE_ROOT}")
+  message(STATUS "ELD package: ${ELD_TOOLS_DIR}")
   message(STATUS "Standalone plugins: ${ELD_PLUGINS}")
 endif()

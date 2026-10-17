@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 
 
@@ -23,6 +24,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plugin-dir", required=True)
     parser.add_argument("--tools-dir", required=True)
+    parser.add_argument("--library-dir", default="")
+    parser.add_argument("--runtime-dir", default="")
     parser.add_argument("--target-cc", default="")
     parser.add_argument("--target-cxx", required=True)
     parser.add_argument("--target-ld", required=True)
@@ -35,8 +38,14 @@ def main():
     tools_dir = Path(args.tools_dir).resolve()
     inputs = Path(__file__).resolve().parent / "Inputs"
     env = os.environ.copy()
-    env["LD_LIBRARY_PATH"] = os.pathsep.join(
-        [str(plugin_dir), str(tools_dir / "lib"), env.get("LD_LIBRARY_PATH", "")])
+    runtime_var = ("PATH" if os.name == "nt" else
+                   "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else
+                   "LD_LIBRARY_PATH")
+    runtime_dirs = [str(plugin_dir),
+                    args.library_dir or str(tools_dir / "lib"),
+                    args.runtime_dir or str(tools_dir / "bin"),
+                    env.get(runtime_var, "")]
+    env[runtime_var] = os.pathsep.join(path for path in runtime_dirs if path)
 
     with tempfile.TemporaryDirectory(prefix="eld-reassign-") as temp:
         work = Path(temp)

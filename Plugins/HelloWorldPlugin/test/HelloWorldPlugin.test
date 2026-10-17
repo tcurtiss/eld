@@ -6,8 +6,8 @@
 # standard ELD lit substitutions.
 #END_COMMENT
 #START_TEST
-RUN: %clang %clangopts -c %p/Inputs/hello.c -o %t.o
-RUN: %link %linkopts %t.o -e main -o %t.out --plugin-config %p/../HelloWorldPlugin.yaml --trace=plugin 2>&1 | %filecheck %s
+RUN: %clang %clangopts -c "%p/Inputs/hello.c" -o "%t.o"
+RUN: %link %linkopts "%t.o" -e main -o "%t.out" --plugin-config "%p/../HelloWorldPlugin.yaml" --trace=plugin 2>&1 | %filecheck "%s"
 #END_TEST
 
 CHECK: Note: Found plugin handler for plugin type HelloWorldPlugin in Library

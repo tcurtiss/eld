@@ -1,5 +1,7 @@
 set(SOURCES CrossReference.cpp)
 
+find_package(ZLIB REQUIRED)
+
 if(ELD_STANDALONE)
   eld_add_standalone_plugin(CrossReference
     SOURCES ${SOURCES}
@@ -19,12 +21,13 @@ endif()
 
 if(NOT ELD_STANDALONE)
   eld_register_plugin_tests(${CMAKE_CURRENT_SOURCE_DIR}/test CrossReference)
-else()
+elseif(BUILD_TESTING)
   eld_add_standalone_test(
     NAME CrossReference
     TARGET CrossReference
     SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/test/standalone_test.py")
   eld_add_standalone_lit_test(
     NAME CrossReference
+    TARGET CrossReference
     TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test")
 endif()

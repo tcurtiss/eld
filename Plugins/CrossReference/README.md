@@ -14,8 +14,6 @@ bitcode/LTO inputs are not inspected.
 Configure ELD/LLVM normally, then build the plugin target:
 
 ```sh
-cmake -S /path/to/llvm-project -B build-eld \
-  -DLLVM_ENABLE_PROJECTS=clang
 cmake --build build-eld --target CrossReference
 ```
 
@@ -26,76 +24,82 @@ serial linking paths.
 
 ## Build standalone against an installed ELD package
 
-Use the package-only CMake entry point when the full LLVM/ELD source tree is
-not available:
-
-When `ELD_TARGET_CXX` and `ELD_TARGET_LD` are omitted, CMake derives the
-linker path and searches for the target compiler under
-`<ELD_PACKAGE_ROOT>/Tools/bin`. Set them explicitly only when the target
-compiler or linker is installed somewhere other than the ELD package.
+Use the top-level Plugins directory, which can be copied outside the ELD
+and LLVM source trees. A compatible host C++ compiler, the ELD public
+development package, and zlib development files are required:
 
 ```sh
-cmake -S /path/to/eld/Plugins \
-  -B build-crossreference \
+cmake -S /path/to/Plugins -B build-crossreference \
+  -DBUILD_STANDALONE_PLUGINS=ON \
   -DELD_PACKAGE_ROOT=/path/to/target_tools \
-  -DELD_PLUGIN_CXX=/path/to/host-clang++ \
-  -DELD_PLUGIN_USE_LIBCXX=ON \
+  -DCMAKE_CXX_COMPILER=/path/to/host-clang++ \
+  -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
   -DELD_PLUGINS=CrossReference
 cmake --build build-crossreference
 ```
 
-`ELD_PLUGIN_CXX` is the host Clang compiler used to build the plugin shared
-library. With `ELD_PLUGIN_USE_LIBCXX=ON`, `-stdlib=libc++` is supplied before
-CMake tests that compiler. `ELD_TARGET_CXX` and `ELD_TARGET_LD` are discovered
-automatically under the ELD package's `Tools/bin` directory. Set them
-explicitly only when the target tools are installed elsewhere. Set
-`ELD_TARGET_TRIPLE`,
-`ELD_TARGET_CXX_FLAGS`, and `ELD_TARGET_LD_FLAGS` when the target toolchain
-requires them. Add
-`-DBUILD_TESTING=OFF` to build without target test tools.
+CMAKE_CXX_COMPILER builds the host plugin, not the target test inputs.
+Choose a compiler and C++ runtime compatible with the installed ELD ABI.
+CMAKE_CXX_FLAGS also applies during CMake's compiler checks. Both conventional
+include/lib/bin installations and packages containing a Tools directory
+are supported. See [the framework README](../README.md) for discovery
+overrides and host platform limitations.
 
-### Run the tests with an external `llvm-lit`
-
-The standalone build registers the plugin-local lit suite with CTest. Use an
-`llvm-lit` from the external LLVM package, and provide the target triple so
-the lit configuration can select the corresponding ELD test target:
+Tests are disabled by default. Enable package-only Python smoke tests in
+the same build directory:
 
 ```sh
-cmake -S /path/to/eld/Plugins \
-  -B build-crossreference \
-  -DELD_PACKAGE_ROOT=/path/to/target_tools \
-  -DELD_PLUGIN_CXX=/path/to/host-clang++ \
-  -DELD_PLUGIN_USE_LIBCXX=ON \
-  -DELD_PLUGINS=CrossReference \
-  -DELD_TARGET_TRIPLE=riscv64-unknown-elf \
-  -DELD_ENABLE_LIT_TESTS=ON \
-  -DELD_LLVM_LIT=/path/to/llvm-package/bin/llvm-lit
+cmake -S /path/to/Plugins -B build-crossreference -DBUILD_TESTING=ON
 cmake --build build-crossreference
-ctest --test-dir build-crossreference \
-  -R ELDStandaloneLit.CrossReference --output-on-failure
+ctest --test-dir build-crossreference --output-on-failure
 ```
 
-The standalone lit configuration is self-contained; it does not require the
-full ELD source tree or the ELD test harness. The external LLVM tools
-directory must provide `FileCheck` and `not`.
+This reuses the cached package and compiler settings. Test setup discovers
+ELD_TARGET_CC, ELD_TARGET_CXX, and ELD_TARGET_LD in the package's bin directory,
+preferring clang/clang++ with hexagon-clang/hexagon-clang++ fallbacks. Override
+those paths when the target tools are elsewhere. ELD_TARGET_TRIPLE selects
+the target architecture, ELD_TARGET_CXX_FLAGS adds flags for both target
+compiler drivers, and ELD_TARGET_LD_FLAGS adds linker flags. These settings
+do not affect compilation of the host plugin.
 
-`ELD_TEST_TARGET=RISCV64` may be supplied instead of
-`ELD_TARGET_TRIPLE` when the automatically derived architecture is not the
-one wanted. `ELD_LLVM_LIT` may be omitted when the external `llvm-lit` is on
-`PATH`. The tools and libraries used by the lit suite are inferred from the
-`llvm-lit` location; set `ELD_LLVM_TOOLS_DIR` or `ELD_LLVM_LIBS_DIR` when
-those directories are elsewhere.
+The reference-count fixtures depend on target code generation. For ARM, use
+`ELD_TARGET_TRIPLE=armv7a-none-eabi`; for Hexagon, use
+`ELD_TARGET_CXX_FLAGS=-G0`. Older ARM instruction sets and Hexagon small-data
+addressing can produce different relocation counts. For direct lit invocations,
+the corresponding parameters are `-Dtarget_triple=armv7a-none-eabi` and
+`-Dtarget_cxx_flags=-G0`. Also supply `-Dpython_executable=/path/to/python3`
+when invoking lit directly; CMake supplies this automatically.
 
-The package-only smoke test is kept with this plugin at
-`test/standalone_test.py`. It builds a small target object, runs ELD with
-gzip-compressed JSON output, and verifies the expected symbols and edges.
-It is registered with CTest when `CrossReference` is selected.
+### Run the tests with an external llvm-lit
 
-The resulting library is under
-`build-crossreference/CrossReference/libCrossReference.so`. When invoking
-`ld.eld` manually, place that directory and the package's `Tools/lib`
-directory in `LD_LIBRARY_PATH` so the plugin loader can find the library and
-its ELD runtime.
+Add lit testing to the same build:
+
+```sh
+cmake -S /path/to/Plugins -B build-crossreference \
+  -DBUILD_TESTING=ON \
+  -DELD_ENABLE_LIT_TESTS=ON \
+  -DELD_TARGET_TRIPLE=riscv64-unknown-elf \
+  -DELD_LLVM_LIT=/path/to/llvm-package/bin/llvm-lit
+cmake --build build-crossreference
+ctest --test-dir build-crossreference --output-on-failure
+```
+
+Select a triple supported by the target tools. Plugins/lit.cfg derives the
+lit architecture from ELD_TARGET_TRIPLE; ELD_TEST_TARGET overrides that
+architecture if necessary. The configuration does not load eld/test/lit.cfg.
+ELD_LLVM_LIT may be omitted when llvm-lit or lit is on PATH. FileCheck and not
+must be in ELD_LLVM_TOOLS_DIR (default: beside the runner). LLVM libraries
+default to the sibling lib directory; ELD_LLVM_LIBS_DIR overrides that path.
+These tests do not require llvm-readelf.
+
+The smoke test is ELDStandalone.CrossReference; the lit suite is
+ELDStandaloneLit.CrossReference. Use `ctest -R` to select either.
+For multi-configuration generators, build with `--config Release` and run
+CTest with `-C Release`. The smoke script is kept at test/standalone_test.py.
+
+When loading the plugin manually, include its output directory and the ELD
+runtime library directory in LD_LIBRARY_PATH on Linux, DYLD_LIBRARY_PATH
+on macOS, or PATH on Windows. CTest arranges these paths automatically.
 
 ## Configuration
 

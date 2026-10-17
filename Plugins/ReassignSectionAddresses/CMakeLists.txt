@@ -1,5 +1,7 @@
 set(SOURCES ReassignSectionAddresses.cpp)
 
+find_package(ZLIB REQUIRED)
+
 if(ELD_STANDALONE)
   eld_standalone_require_api(ReassignSectionAddresses LinkerWrapper.h
                               setSymbolAddress)
@@ -22,12 +24,13 @@ endif()
 if(NOT ELD_STANDALONE)
   eld_register_plugin_tests(${CMAKE_CURRENT_SOURCE_DIR}/test
                             ReassignSectionAddresses)
-else()
+elseif(BUILD_TESTING)
   eld_add_standalone_test(
     NAME ReassignSectionAddresses
     TARGET ReassignSectionAddresses
     SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/test/standalone_test.py")
   eld_add_standalone_lit_test(
     NAME ReassignSectionAddresses
+    TARGET ReassignSectionAddresses
     TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test")
 endif()

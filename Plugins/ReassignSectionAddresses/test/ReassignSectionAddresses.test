@@ -1,4 +1,5 @@
 #---ReassignSectionAddresses.test---------------- Executable,LS ----------------#
+# REQUIRES: llvm-readelf
 #BEGIN_COMMENT
 # Tests the ReassignSectionAddresses OutputSectionIteratorPlugin.  The plugin
 # assigns absolute addresses to data/object symbols in DSECT output sections.
@@ -117,20 +118,22 @@ UNKNOWN-OPTIONS: [ReassignSectionAddresses] Init: unknown hash 'unknown', defaul
 UNKNOWN-OPTIONS: [ReassignSectionAddresses] Init: ignoring unknown option key 'unknown'
 UNKNOWN-OPTIONS: [ReassignSectionAddresses] Init: ignoring malformed option field 'malformed'
 
-NO-SECTION: Fatal: Linking had errors
-NO-SECTION: [ReassignSectionAddresses] Init: section= is required and must specify at least one target output section
+# Error text and the fatal summary may appear in either order depending on
+# whether the installed package supports the optional plugin tracing helper.
+NO-SECTION-DAG: Fatal: Linking had errors
+NO-SECTION-DAG: section= is required and must specify at least one target output section
 
-DUMP-MISMATCH: Fatal: Linking had errors
-DUMP-MISMATCH: [ReassignSectionAddresses] Init: dump= must specify exactly one path per target section (2 section(s), 1 dump path(s) given)
+DUMP-MISMATCH-DAG: Fatal: Linking had errors
+DUMP-MISMATCH-DAG: dump= must specify exactly one path per target section (2 section(s), 1 dump path(s) given)
 
-INVALID-GZIP: Fatal: Linking had errors
-INVALID-GZIP: [ReassignSectionAddresses] Init: gzip= must be 'yes' or 'no'
+INVALID-GZIP-DAG: Fatal: Linking had errors
+INVALID-GZIP-DAG: gzip= must be 'yes' or 'no'
 
-INVALID-DEBUG-DUMP: Fatal: Linking had errors
-INVALID-DEBUG-DUMP: [ReassignSectionAddresses] Init: debug_dump= must be 'yes' or 'no'
+INVALID-DEBUG-DUMP-DAG: Fatal: Linking had errors
+INVALID-DEBUG-DUMP-DAG: debug_dump= must be 'yes' or 'no'
 
-DEBUG-DUMP-NO-DUMP: Fatal: Linking had errors
-DEBUG-DUMP-NO-DUMP: [ReassignSectionAddresses] Init: debug_dump=yes requires dump=
+DEBUG-DUMP-NO-DUMP-DAG: Fatal: Linking had errors
+DEBUG-DUMP-NO-DUMP-DAG: debug_dump=yes requires dump=
 
-INVALID-CLEAN-STRINGS: Fatal: Linking had errors
-INVALID-CLEAN-STRINGS: [ReassignSectionAddresses] Init: clean_strings= must be 'yes' or 'no'
+INVALID-CLEAN-STRINGS-DAG: Fatal: Linking had errors
+INVALID-CLEAN-STRINGS-DAG: clean_strings= must be 'yes' or 'no'
