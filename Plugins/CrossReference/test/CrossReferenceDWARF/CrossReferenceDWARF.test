@@ -29,6 +29,11 @@ RUN: rm -f xref_dump.txt
 RUN: %link %linkopts %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigUseDWARFSourceRoot.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-DWARF-ROOT
 RUN: rm -f xref_dump.txt
+# Relocatable DWARF string forms in ordinary -g input can be unresolved while
+# ELD inspects the input object. They must be ignored without aborting the link.
+RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.2.o -ffunction-sections -fdata-sections -g
+RUN: %link %linkopts %t1.2.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigUseDWARF.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: rm -f xref_dump.txt
 #END_TEST
 
 LINK-NOT: Error
