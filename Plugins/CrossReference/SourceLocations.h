@@ -27,28 +27,6 @@ struct FileSources {
   std::vector<std::pair<eld::plugin::Symbol, SourceLoc>> Locations;
 };
 
-struct DIENameInfo {
-  std::string Name;
-  std::string LinkageName;
-};
-
-// Do not use DWARFDie::getName() here. Older ELD packages left a failed
-// getAsCString() error unchecked for a malformed/non-string DW_AT_name, which
-// aborts the linker when the temporary llvm::Expected is destroyed. The public
-// DWARFValue accessor consumes that error and lets this optional enrichment
-// skip the malformed DIE instead.
-inline DIENameInfo getDIENameInfo(const eld::plugin::DWARFDie &Die) {
-  DIENameInfo Result;
-  for (eld::plugin::DWARFAttribute &Attr : Die.getAttributes()) {
-    std::string Key = Attr.getAttributeName();
-    if (Key == "DW_AT_name")
-      Result.Name = Attr.getValue().getValueAsString();
-    else if (Key == "DW_AT_linkage_name" || Key == "DW_AT_MIPS_linkage_name")
-      Result.LinkageName = Attr.getValue().getValueAsString();
-  }
-  return Result;
-}
-
 // One worker owns the entire reader and its transient name index. In
 // particular, do not use getDWARFInfoForInputFile here: its section-map context
 // does not resolve object relocations and remains cached in the linker. This
@@ -80,8 +58,7 @@ readSourceLocations(eld::plugin::InputFile IF,
       if (!Die.isSubprogramDIE() && !Die.isVariable())
         continue;
       DWARFDie Naming = Die;
-      DIENameInfo NameInfo = getDIENameInfo(Naming);
-      std::string Name = NameInfo.Name;
+      std::string Name = Naming.getName();
       // Abstract origins can carry names omitted from a concrete DIE. Bound the
       // walk even for malformed/cyclic input; do not guess from plain PCs in
       // relocatable files, where separate sections can have identical PCs.
@@ -90,15 +67,21 @@ readSourceLocations(eld::plugin::InputFile IF,
         if (!Origin)
           break;
         Naming = Origin;
-        NameInfo = getDIENameInfo(Naming);
-        Name = NameInfo.Name;
+        Name = Naming.getName();
       }
       auto Match = Names.find(Name);
       // A linkage name is authoritative even when the plain name happens to
       // match another ELF symbol (e.g. global data and namespace::data).
-      bool Linkage = !NameInfo.LinkageName.empty();
-      if (Linkage)
-        Match = Names.find(NameInfo.LinkageName);
+      // Attribute wrappers are transient, never retained in the index.
+      bool Linkage = false;
+      for (DWARFAttribute &Attr : Naming.getAttributes()) {
+        std::string Key = Attr.getAttributeName();
+        if (Key != "DW_AT_linkage_name" && Key != "DW_AT_MIPS_linkage_name")
+          continue;
+        Match = Names.find(Attr.getValue().getValueAsString());
+        Linkage = true;
+        break;
+      }
       if (Match == Names.end())
         continue;
       std::string File = Die.getDeclFile();

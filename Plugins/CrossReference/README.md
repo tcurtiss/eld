@@ -113,8 +113,7 @@ on macOS, or PATH on Windows. CTest arranges these paths automatically.
 The plugin is configured through a colon-delimited `key=value` option string.
 The `file` option is required.
 
-The DWARF option is named `use_dwarf`; update older configurations using
-`usedwarf`, which is no longer accepted.
+`symbol_details` controls optional symbol metadata.
 
 ```yaml
 GlobalPlugins:
@@ -136,8 +135,7 @@ The supported options are:
 | `coalesce_dirs=none\|unary` | `none` | In JSON formats, folds empty single-child directory chains after the first two path components. |
 | `show_gc=yes\|no` | `no` | Includes garbage-collected symbols and edges in text output. |
 | `cpp_demangle=yes\|no` | `no` | Demangles C++ names in output and name-pattern matching. |
-| `symbol_details=yes\|no` | `no` | Adds symbol records and attributed reference pairs to either JSON format. No effect on text. |
-| `use_dwarf=yes\|no` | `no` | Looks up function and variable declaration locations in DWARF. Implies `symbol_details=yes` for JSON. |
+| `symbol_details=none\|elf\|dwarf` | `none` | `elf` adds symbol records and attributed reference pairs to JSON. `dwarf` additionally looks up function and variable declaration locations in DWARF, and adds source locations to JSON and text. Text always emits its compact symbol catalog and edge table. |
 | `exclude_symbols=<globs>` | unset | Comma-delimited name patterns. Matching symbols and their edges are omitted. |
 | `exclude_files=<globs>` | unset | Comma-delimited patterns matched against resolved object-file paths. |
 | `include_symbols=<globs>` | unset | If present, only symbols matching at least one pattern are retained. |
@@ -199,7 +197,7 @@ cleanup still affect dashboard names and paths.
 
 ## C++ demangling
 
-`cpp_demangle=yes` is independent of `symbol_details` and `use_dwarf`. It changes
+`cpp_demangle=yes` is independent of the selected `symbol_details` level. It changes
 display names but preserves raw ELF names in `symbolDetails.linkageName` and
 does not change DWARF name matching. Demangling adds CPU/allocation cost and
 usually increases output size, especially for template-heavy C++. Results are
@@ -219,8 +217,9 @@ Each worker builds private results, which are merged deterministically, so text
 and JSON output remains stable. With `--no-threads` (or a single configured
 thread), the same code executes directly without creating a worker pool.
 
-The plugin avoids symbol-level attribution for JSON unless `symbol_details=yes`
-or `use_dwarf=yes` is selected. No DWARF reader is constructed with `use_dwarf=no`.
+The plugin avoids symbol-level attribution for JSON unless `symbol_details=elf`
+or `symbol_details=dwarf` is selected. No DWARF reader is constructed unless
+`symbol_details=dwarf` is selected.
 Repeated references are aggregated while they are walked, and repeated
 dashboard file paths and output-section names are interned. JSON serializers
 stream directly to the output stream; gzip output avoids an additional complete
@@ -282,7 +281,7 @@ edge table. The header comments are also a legend:
 ```text
 # Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t<output-section>
 #   '?' address means garbage-collected; section is the linked output section.
-#   with use_dwarf=yes, source appears after the name as (file:line).
+#   with symbol_details=dwarf, source appears after the name as (file:line).
 <id>\t<name>\t<object-file>\t0x<size>\t<address>\t<output-section>
 
 # Edges: <src-id>\t<dst-id>\t<count>\t<flags>
@@ -300,7 +299,7 @@ Example:
 ```text
 # Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t<output-section>
 #   '?' address means garbage-collected; section is the linked output section.
-#   with use_dwarf=yes, source appears after the name as (file:line).
+#   with symbol_details=dwarf, source appears after the name as (file:line).
 0\tmain\tapp.o\t0x20\t0x1000\t.text
 1\tfoo\tlib.o\t0x10\t0x1020\t.text
 # Edges: <src-id>\t<dst-id>\t<count>\t<flags>
@@ -413,13 +412,16 @@ the entries from `offsets[i]` through `offsets[i+1]` refer to target IDs in
 
 ## DWARF source locations
 
-With `use_dwarf=yes`, the plugin reads both `DW_TAG_subprogram` and
+With `symbol_details=dwarf`, the plugin reads both `DW_TAG_subprogram` and
 `DW_TAG_variable` DIEs using an object-aware public Plugin API reader that
 resolves debug relocations. Ordinary `-g`, including DWARF 4 and 5, is supported;
 inline debug strings are not required. Linkage names identify C++ symbols;
 plain names provide the fallback for C. Name matching is scoped to each input
 file. Equal-rank conflicting declaration locations are omitted, not guessed.
 Missing debug info or an alias without its own matching DIE yields no location.
+If no declaration locations are recovered, `symbol_details=dwarf` falls back
+to the `symbol_details=elf` JSON schema: it emits no empty source table or
+source columns.
 
 Locations are **declarations, not instruction/call-site lines**. They appear
 after the text symbol name as `(file:line)` and in JSON `symbolDetails`.
@@ -429,12 +431,13 @@ nearest-symbol attribution still describe static relocations, not dynamic calls.
 
 ## Optional JSON symbol details (version 1)
 
-`symbol_details=yes` adds a top-level `symbolDetails` object without changing
-section nodes, sizes, or aggregated section edges. `use_dwarf=yes` additionally
-includes source locations and enables this extension automatically. For example:
+`symbol_details=elf` adds a top-level `symbolDetails` object without changing
+section nodes, sizes, or aggregated section edges. `symbol_details=dwarf`
+additionally includes source locations when they are recovered; otherwise its
+JSON output falls back to the `elf` detail schema. For example:
 
 ```yaml
-Options: file=xref.json:format=json_columnar:use_dwarf=yes:strip_prefix=*/src/:gzip=yes
+Options: file=xref.json:format=json_columnar:symbol_details=dwarf:strip_prefix=*/src/:gzip=yes
 ```
 
 Both JSON formats use the following fields:
@@ -442,14 +445,14 @@ Both JSON formats use the following fields:
 | Table / field | Meaning |
 |---|---|
 | `version` | Extension version, currently 1; outer columnar version stays 1. |
-| `sourceFiles` | Interned, cleaned source paths, present with `use_dwarf=yes`. |
+| `sourceFiles` | Interned, cleaned source paths, present only when `symbol_details=dwarf` recovers at least one location. |
 | `symbols.id` | Export-local symbol ID (implicit array index in columnar format). |
 | `symbols.section` | Owning section ID from the ordinary section graph. |
 | `symbols.chunk` | Export-local chunk ID; symbols in the same chunk share it. |
 | `symbols.name`, `linkageName` | Display name (honors `cpp_demangle`) and raw ELF name. |
 | `symbols.offset`, `size` | Chunk-relative offset and symbol size in bytes. Not a section-relative offset or final address. |
 | `symbols.flags` | Bit mask: 1 local, 2 weak, 4 function, 8 object/data. |
-| `symbols.sourceFile`, `sourceLine` | Index into `sourceFiles` and declaration line. |
+| `symbols.sourceFile`, `sourceLine` | Index into `sourceFiles` and declaration line; omitted when no DWARF locations are recovered. |
 | `refs.sourceSection`, `targetSection` | Section IDs, retained even when an endpoint symbol is unavailable. |
 | `refs.src`, `dst` | Symbol IDs, or -1 when unavailable. |
 | `refs.count` | Aggregated static relocation count for this section/symbol pair. |
@@ -458,8 +461,9 @@ Both JSON formats use the following fields:
 In `format=json`, `symbols` and `refs` are arrays of objects with these fields.
 Missing source locations omit `sourceFile` and `sourceLine`. In
 `format=json_columnar`, both are objects of parallel arrays; `symbols.count`
-gives the number of symbols. Source columns are present only with `use_dwarf=yes`,
-and missing locations use `sourceFile=-1`, `sourceLine=0`.
+gives the number of symbols. Source columns are present only when
+`symbol_details=dwarf` recovers at least one location; then missing individual
+locations use `sourceFile=-1`, `sourceLine=0`.
 
 Detailed references include same-section and self-symbol pairs, unlike the
 section graph. Symbol records include locals and GC'd sections independently of
