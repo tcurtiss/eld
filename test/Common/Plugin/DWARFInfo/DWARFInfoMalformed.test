@@ -1,0 +1,18 @@
+#---DWARFInfoMalformed.test------------- Executable,LS --------------------#
+#BEGIN_COMMENT
+# Corrupt optional DWARF metadata without changing the linkable program.
+# Both DWARF reader paths exercised by the plugin must tolerate it.
+#END_COMMENT
+#START_TEST
+RUN: %clang -c -g %p/Inputs/1.c -o %t.o
+# Remove the abbreviation table needed to decode the DIE stream.
+RUN: %objcopy --remove-section=.rel.debug_info --remove-section=.rela.debug_info --remove-section=.debug_abbrev %t.o %t.bad-abbrev.o
+RUN: %link %t.bad-abbrev.o -T %p/Inputs/script.t -o %t.bad-abbrev.out 2>&1 | %filecheck %s --check-prefix=CORRUPT --allow-empty
+# Keep the DIE stream intact but remove its DWARF string backing. Every DIE
+# name lookup must consume the resulting getAsCString() error.
+RUN: %objcopy --remove-section=.rel.debug_str --remove-section=.rela.debug_str --remove-section=.rel.debug_str_offsets --remove-section=.rela.debug_str_offsets --remove-section=.debug_str %t.o %t.bad-string.o
+RUN: %link %t.bad-string.o -T %p/Inputs/script.t -o %t.bad-string.out 2>&1 | %filecheck %s --check-prefix=BADSTRING --allow-empty
+
+CORRUPT-NOT: fatalUncheckedError
+BADSTRING-NOT: fatalUncheckedError
+#END_TEST

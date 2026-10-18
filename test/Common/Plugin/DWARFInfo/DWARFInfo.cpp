@@ -20,29 +20,13 @@ public:
       // input files directly. Parsing malformed optional metadata must not
       // abort the link.
       DWARFInfo DirectDI(F);
-      for (DWARFUnit &Unit : DirectDI.getDWARFUnits())
-        for (DWARFDie &Die : Unit.getDIEs()) {
-          (void)Die.getName();
-          if (Die.isType()) {
-            uint64_t Size;
-            (void)Die.getSize(Size, 8);
-          }
-        }
+      inspectDIEs(DirectDI);
 
       eld::Expected<DWARFInfo> expDI =
           getLinker()->getDWARFInfoForInputFile(F, true);
       DWARFInfo DI = (expDI ? expDI.value() : DWARFInfo(nullptr));
       if (DI.hasDWARFContext()) {
-        // Exercise string decoding for every DIE. A malformed or unresolved
-        // DW_AT_name is optional debug metadata and must not abort the link.
-        for (DWARFUnit &Unit : DI.getDWARFUnits())
-          for (DWARFDie &Die : Unit.getDIEs()) {
-            (void)Die.getName();
-            if (Die.isType()) {
-              uint64_t Size;
-              (void)Die.getSize(Size, 8);
-            }
-          }
+        inspectDIEs(DI);
         std::cout << "good\n";
       } else {
         std::cout << "bad\n";
@@ -63,6 +47,20 @@ public:
   std::string GetLastErrorAsString() override { return "SUCCESS"; }
 
   std::string GetName() override { return "GETOUTPUT"; }
+
+private:
+  // Exercise name decoding and type-size queries through either reader path.
+  // Malformed or unsupported optional debug metadata must not abort the link.
+  static void inspectDIEs(const DWARFInfo &DI) {
+    for (DWARFUnit &Unit : DI.getDWARFUnits())
+      for (DWARFDie &Die : Unit.getDIEs()) {
+        (void)Die.getName();
+        if (Die.isType()) {
+          uint64_t Size;
+          (void)Die.getSize(Size, 8);
+        }
+      }
+  }
 };
 
 Plugin *ThisPlugin = nullptr;
