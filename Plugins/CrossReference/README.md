@@ -126,7 +126,8 @@ The supported options are:
 | `coalesce_dirs=none\|unary` | `none` | In JSON formats, folds empty single-child directory chains after the first two path components. |
 | `show_gc=yes\|no` | `no` | Includes garbage-collected symbols and edges in text output. |
 | `cpp_demangle=yes\|no` | `no` | Demangles C++ names in output and name-pattern matching. |
-| `usedwarf=yes\|no` | `no` | Looks up function and variable declaration locations in DWARF. |
+| `symbol_details=yes\|no` | `no` | Adds symbol records and attributed reference pairs to either JSON format. No effect on text. |
+| `usedwarf=yes\|no` | `no` | Looks up function and variable declaration locations in DWARF. Implies `symbol_details=yes` for JSON. |
 | `exclude_symbols=<globs>` | unset | Comma-delimited name patterns. Matching symbols and their edges are omitted. |
 | `exclude_files=<globs>` | unset | Comma-delimited patterns matched against resolved object-file paths. |
 | `include_symbols=<globs>` | unset | If present, only symbols matching at least one pattern are retained. |
@@ -186,6 +187,16 @@ the symbol filters, `show_gc`, or `exclude_intra_file`. They contain the
 section graph independently of the text dump filters. `cpp_demangle` and path
 cleanup still affect dashboard names and paths.
 
+## C++ demangling
+
+`cpp_demangle=yes` is independent of `symbol_details` and `usedwarf`. It changes
+display names but preserves raw ELF names in `symbolDetails.linkageName` and
+does not change DWARF name matching. Demangling adds CPU/allocation cost and
+usually increases output size, especially for template-heavy C++. Results are
+not cached across uses: section naming, symbol serialization, and text name
+filtering can demangle the same symbol again. Section naming runs in parallel;
+serialization is serial. Keep the default `cpp_demangle=no` for lowest overhead.
+
 ## Parallel work
 
 When ELD is multithreaded, the plugin uses the Plugin API thread pool for
@@ -198,15 +209,21 @@ Each worker builds private results, which are merged deterministically, so text
 and JSON output remains stable. With `--no-threads` (or a single configured
 thread), the same code executes directly without creating a worker pool.
 
-The plugin also avoids symbol-level attribution and DWARF indexing when a JSON
-format is selected, because those formats contain the section-level graph only.
+The plugin avoids symbol-level attribution for JSON unless `symbol_details=yes`
+or `usedwarf=yes` is selected. No DWARF reader is constructed with `usedwarf=no`.
 Repeated references are aggregated while they are walked, and repeated
 dashboard file paths and output-section names are interned. JSON serializers
 stream directly to the output stream; gzip output avoids an additional complete
 copy of the compressed payload. Text edge aggregation uses compact integer IDs,
 and the referrer index is stored as one contiguous symbol array with per-chunk
 ranges instead of one separately allocated vector per chunk. When DWARF is
-enabled, only names belonging to symbols that survive text filters are indexed.
+enabled, only names belonging to exported symbols are indexed (with text filters
+applied in text mode). Reference walking and DWARF work use batches bounded by
+twice the worker count. Each DWARF worker owns and releases its object reader and
+temporary name index; debug contexts are not accumulated in the linker cache.
+Source paths are interned and symbol locations store numeric file IDs. The
+optional symbol/reference tables necessarily add memory proportional to their
+exported records; use ordinary JSON when only section accounting is needed.
 
 The plugin records timers for each major phase. They are visible when ELD
 timing statistics are enabled, for example with `--emit-timing-stats` and an
@@ -386,13 +403,57 @@ the entries from `offsets[i]` through `offsets[i+1]` refer to target IDs in
 
 ## DWARF source locations
 
-With `usedwarf=yes`, the plugin indexes both `DW_TAG_subprogram` and
-`DW_TAG_variable` DIEs. In the current implementation, source locations are
-printed in text symbols as `(file:line)`; the dashboard JSON formats do not
-emit source-location fields.
+With `usedwarf=yes`, the plugin reads both `DW_TAG_subprogram` and
+`DW_TAG_variable` DIEs using an object-aware public Plugin API reader that
+resolves debug relocations. Ordinary `-g`, including DWARF 4 and 5, is supported;
+inline debug strings are not required. Linkage names identify C++ symbols;
+plain names provide the fallback for C. Name matching is scoped to each input
+file. Equal-rank conflicting declaration locations are omitted, not guessed.
+Missing debug info or an alias without its own matching DIE yields no location.
 
-DWARF is read directly from each input file's unrelocated bytes. Debug strings
-stored through relocated forms such as `DW_FORM_strp` or `DW_FORM_strx` may not
-resolve correctly because non-allocatable debug-section relocations are not
-applied by the plugin API. Using inline debug strings, for example
-`-gdwarf-2 -mllvm -dwarf-inlined-strings=Enable`, avoids that limitation.
+Locations are **declarations, not instruction/call-site lines**. They appear
+after the text symbol name as `(file:line)` and in JSON `symbolDetails`.
+`source_root` and `strip_prefix` clean both object and DWARF paths. DWARF cannot
+reconstruct arbitrary names removed by obfuscation. Containing-symbol and
+nearest-symbol attribution still describe static relocations, not dynamic calls.
+
+## Optional JSON symbol details (version 1)
+
+`symbol_details=yes` adds a top-level `symbolDetails` object without changing
+section nodes, sizes, or aggregated section edges. `usedwarf=yes` additionally
+includes source locations and enables this extension automatically. For example:
+
+```yaml
+Options: file=xref.json:format=json_columnar:usedwarf=yes:strip_prefix=*/src/:gzip=yes
+```
+
+Both JSON formats use the following fields:
+
+| Table / field | Meaning |
+|---|---|
+| `version` | Extension version, currently 1; outer columnar version stays 1. |
+| `sourceFiles` | Interned, cleaned source paths, present with `usedwarf=yes`. |
+| `symbols.id` | Export-local symbol ID (implicit array index in columnar format). |
+| `symbols.section` | Owning section ID from the ordinary section graph. |
+| `symbols.chunk` | Export-local chunk ID; symbols in the same chunk share it. |
+| `symbols.name`, `linkageName` | Display name (honors `cpp_demangle`) and raw ELF name. |
+| `symbols.offset`, `size` | Chunk-relative offset and symbol size in bytes. Not a section-relative offset or final address. |
+| `symbols.flags` | Bit mask: 1 local, 2 weak, 4 function, 8 object/data. |
+| `symbols.sourceFile`, `sourceLine` | Index into `sourceFiles` and declaration line. |
+| `refs.sourceSection`, `targetSection` | Section IDs, retained even when an endpoint symbol is unavailable. |
+| `refs.src`, `dst` | Symbol IDs, or -1 when unavailable. |
+| `refs.count` | Aggregated static relocation count for this section/symbol pair. |
+| `refs.flags` | Bit mask: 1 nearest-symbol approximation, 2 unattributed source, 4 trampoline. Tags are unioned when aggregating. |
+
+In `format=json`, `symbols` and `refs` are arrays of objects with these fields.
+Missing source locations omit `sourceFile` and `sourceLine`. In
+`format=json_columnar`, both are objects of parallel arrays; `symbols.count`
+gives the number of symbols. Source columns are present only with `usedwarf=yes`,
+and missing locations use `sourceFile=-1`, `sourceLine=0`.
+
+Detailed references include same-section and self-symbol pairs, unlike the
+section graph. Symbol records include locals and GC'd sections independently of
+text filtering options. Aliases can share ranges: **never sum symbol sizes to
+calculate footprint**. Continue using section sizes, and treat symbol details as
+inspection metadata. Neither IDs nor the chosen alias for range attribution are
+persistent identities across builds.
