@@ -31,6 +31,10 @@ RUN: %link %linkopts --gc-sections %t/a.o %t/b.o -e entry -o %t/out --plugin-con
 RUN: %python %p/check.py gc %t
 RUN: %not %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/invalid.yaml 2>&1 | %filecheck %s
 # CHECK: symbol_details option must be 'yes' or 'no'
+RUN: %not %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/invalid_dwarf.yaml 2>&1 | %filecheck %s --check-prefix=INVALID-DWARF
+# INVALID-DWARF: use_dwarf option must be 'yes' or 'no'
+RUN: %not %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/old_dwarf.yaml 2>&1 | %filecheck %s --check-prefix=OLD-DWARF
+# OLD-DWARF: CrossReference does not recognize option 'usedwarf'
 RUN: %clangxx %clangopts -O0 -fno-exceptions -fno-rtti -c %p/Inputs/a.cpp -o %t/a.o
 RUN: %clang %clangopts -O0 -c %p/Inputs/b.c -o %t/b.o
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml

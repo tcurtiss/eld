@@ -29,14 +29,16 @@ mode, base = sys.argv[1], pathlib.Path(sys.argv[2])
 if mode == 'configs':
     base.mkdir(exist_ok=True)
     modes = {'plain': 'format=json', 'detail': 'format=json:symbol_details=yes',
-             'nodwarf': 'format=json:symbol_details=yes:usedwarf=no',
-             'dwarf': 'format=json:usedwarf=yes:source_root=/',
-             'columnar': 'format=json_columnar:usedwarf=yes:source_root=/',
-             'gzip': 'format=json_columnar:usedwarf=yes:source_root=/:gzip=yes',
-             'strip': 'format=json:usedwarf=yes:strip_prefix=*/CrossReferenceDetails/',
-             'demangled': 'format=json_columnar:usedwarf=yes:source_root=/:cpp_demangle=yes',
+             'nodwarf': 'format=json:symbol_details=yes:use_dwarf=no',
+             'dwarf': 'format=json:use_dwarf=yes:source_root=/',
+             'columnar': 'format=json_columnar:use_dwarf=yes:source_root=/',
+             'gzip': 'format=json_columnar:use_dwarf=yes:source_root=/:gzip=yes',
+             'strip': 'format=json:use_dwarf=yes:strip_prefix=*/CrossReferenceDetails/',
+             'demangled': 'format=json_columnar:use_dwarf=yes:source_root=/:cpp_demangle=yes',
              'filtered': 'format=json:symbol_details=yes:exclude_local=yes:exclude_data=yes:min_refs=99999',
-             'invalid': 'format=json:symbol_details=maybe'}
+             'invalid': 'format=json:symbol_details=maybe',
+             'invalid_dwarf': 'format=json:use_dwarf=maybe',
+             'old_dwarf': 'format=json:usedwarf=yes'}
     for name, opts in modes.items():
         text = ('GlobalPlugins:\n  - Type: LinkerPlugin\n    Name: CrossReference\n'
                 '    Library: CrossReference\n    Options: ')
