@@ -131,7 +131,11 @@ const std::string plugin::DWARFDie::getName() const {
     return "";
 
   auto Value = V->getAsCString();
-  return Value ? *Value : "";
+  if (!Value) {
+    consumeError(Value.takeError());
+    return "";
+  }
+  return *Value;
 }
 
 const std::string plugin::DWARFDie::getDeclFile() const {
