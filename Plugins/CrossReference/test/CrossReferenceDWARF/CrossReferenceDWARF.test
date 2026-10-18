@@ -1,9 +1,9 @@
 #---CrossReferenceDWARF.test----------------- Executable,LS --------------------#
 #BEGIN_COMMENT
-# Tests the CrossReference's usedwarf option: with usedwarf=yes, each
+# Tests the CrossReference's use_dwarf option: with use_dwarf=yes, each
 # symbol in the dump is additionally qualified with its declaring source
 # file and line number, as recovered from DWARF debug info (in text format,
-# appended to the symbol name as "(source-file:line)"). By default (usedwarf unset),
+# appended to the symbol name as "(source-file:line)"). By default (use_dwarf unset),
 # no such information is looked up or
 # printed, exactly as before this option existed.
 #
@@ -42,7 +42,7 @@ DUMP-NODWARF-NOT: 1.c
 DUMP-NODWARF: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
 
 DUMP-DWARF: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
-DUMP-DWARF: #   with usedwarf=yes, source appears after the name as (file:line).
+DUMP-DWARF: #   with use_dwarf=yes, source appears after the name as (file:line).
 DUMP-DWARF-DAG: foo ({{.*}}1.c:2){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-DWARF-DAG: bar ({{.*}}1.c:3){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
 DUMP-DWARF-DAG: main ({{.*}}1.c:4){{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}

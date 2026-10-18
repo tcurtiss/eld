@@ -106,6 +106,9 @@ on macOS, or PATH on Windows. CTest arranges these paths automatically.
 The plugin is configured through a colon-delimited `key=value` option string.
 The `file` option is required.
 
+The DWARF option is named `use_dwarf`; update older configurations using
+`usedwarf`, which is no longer accepted.
+
 ```yaml
 GlobalPlugins:
   - Type: LinkerPlugin
@@ -127,7 +130,7 @@ The supported options are:
 | `show_gc=yes\|no` | `no` | Includes garbage-collected symbols and edges in text output. |
 | `cpp_demangle=yes\|no` | `no` | Demangles C++ names in output and name-pattern matching. |
 | `symbol_details=yes\|no` | `no` | Adds symbol records and attributed reference pairs to either JSON format. No effect on text. |
-| `usedwarf=yes\|no` | `no` | Looks up function and variable declaration locations in DWARF. Implies `symbol_details=yes` for JSON. |
+| `use_dwarf=yes\|no` | `no` | Looks up function and variable declaration locations in DWARF. Implies `symbol_details=yes` for JSON. |
 | `exclude_symbols=<globs>` | unset | Comma-delimited name patterns. Matching symbols and their edges are omitted. |
 | `exclude_files=<globs>` | unset | Comma-delimited patterns matched against resolved object-file paths. |
 | `include_symbols=<globs>` | unset | If present, only symbols matching at least one pattern are retained. |
@@ -189,7 +192,7 @@ cleanup still affect dashboard names and paths.
 
 ## C++ demangling
 
-`cpp_demangle=yes` is independent of `symbol_details` and `usedwarf`. It changes
+`cpp_demangle=yes` is independent of `symbol_details` and `use_dwarf`. It changes
 display names but preserves raw ELF names in `symbolDetails.linkageName` and
 does not change DWARF name matching. Demangling adds CPU/allocation cost and
 usually increases output size, especially for template-heavy C++. Results are
@@ -210,7 +213,7 @@ and JSON output remains stable. With `--no-threads` (or a single configured
 thread), the same code executes directly without creating a worker pool.
 
 The plugin avoids symbol-level attribution for JSON unless `symbol_details=yes`
-or `usedwarf=yes` is selected. No DWARF reader is constructed with `usedwarf=no`.
+or `use_dwarf=yes` is selected. No DWARF reader is constructed with `use_dwarf=no`.
 Repeated references are aggregated while they are walked, and repeated
 dashboard file paths and output-section names are interned. JSON serializers
 stream directly to the output stream; gzip output avoids an additional complete
@@ -272,7 +275,7 @@ edge table. The header comments are also a legend:
 ```text
 # Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t<output-section>
 #   '?' address means garbage-collected; section is the linked output section.
-#   with usedwarf=yes, source appears after the name as (file:line).
+#   with use_dwarf=yes, source appears after the name as (file:line).
 <id>\t<name>\t<object-file>\t0x<size>\t<address>\t<output-section>
 
 # Edges: <src-id>\t<dst-id>\t<count>\t<flags>
@@ -290,7 +293,7 @@ Example:
 ```text
 # Symbols: <id>\t<name>\t<file>\t0x<size>\t<address>\t<output-section>
 #   '?' address means garbage-collected; section is the linked output section.
-#   with usedwarf=yes, source appears after the name as (file:line).
+#   with use_dwarf=yes, source appears after the name as (file:line).
 0\tmain\tapp.o\t0x20\t0x1000\t.text
 1\tfoo\tlib.o\t0x10\t0x1020\t.text
 # Edges: <src-id>\t<dst-id>\t<count>\t<flags>
@@ -403,7 +406,7 @@ the entries from `offsets[i]` through `offsets[i+1]` refer to target IDs in
 
 ## DWARF source locations
 
-With `usedwarf=yes`, the plugin reads both `DW_TAG_subprogram` and
+With `use_dwarf=yes`, the plugin reads both `DW_TAG_subprogram` and
 `DW_TAG_variable` DIEs using an object-aware public Plugin API reader that
 resolves debug relocations. Ordinary `-g`, including DWARF 4 and 5, is supported;
 inline debug strings are not required. Linkage names identify C++ symbols;
@@ -420,11 +423,11 @@ nearest-symbol attribution still describe static relocations, not dynamic calls.
 ## Optional JSON symbol details (version 1)
 
 `symbol_details=yes` adds a top-level `symbolDetails` object without changing
-section nodes, sizes, or aggregated section edges. `usedwarf=yes` additionally
+section nodes, sizes, or aggregated section edges. `use_dwarf=yes` additionally
 includes source locations and enables this extension automatically. For example:
 
 ```yaml
-Options: file=xref.json:format=json_columnar:usedwarf=yes:strip_prefix=*/src/:gzip=yes
+Options: file=xref.json:format=json_columnar:use_dwarf=yes:strip_prefix=*/src/:gzip=yes
 ```
 
 Both JSON formats use the following fields:
@@ -432,7 +435,7 @@ Both JSON formats use the following fields:
 | Table / field | Meaning |
 |---|---|
 | `version` | Extension version, currently 1; outer columnar version stays 1. |
-| `sourceFiles` | Interned, cleaned source paths, present with `usedwarf=yes`. |
+| `sourceFiles` | Interned, cleaned source paths, present with `use_dwarf=yes`. |
 | `symbols.id` | Export-local symbol ID (implicit array index in columnar format). |
 | `symbols.section` | Owning section ID from the ordinary section graph. |
 | `symbols.chunk` | Export-local chunk ID; symbols in the same chunk share it. |
@@ -448,7 +451,7 @@ Both JSON formats use the following fields:
 In `format=json`, `symbols` and `refs` are arrays of objects with these fields.
 Missing source locations omit `sourceFile` and `sourceLine`. In
 `format=json_columnar`, both are objects of parallel arrays; `symbols.count`
-gives the number of symbols. Source columns are present only with `usedwarf=yes`,
+gives the number of symbols. Source columns are present only with `use_dwarf=yes`,
 and missing locations use `sourceFile=-1`, `sourceLine=0`.
 
 Detailed references include same-section and self-symbol pairs, unlike the

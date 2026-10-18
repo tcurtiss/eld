@@ -94,7 +94,7 @@
 //                            for C++).
 //   symbol_details=yes|no -- add symbol identities and attributed reference
 //                            pairs to either JSON format (default: no).
-//   usedwarf=yes|no      -- index function and variable declaration sites
+//   use_dwarf=yes|no      -- index function and variable declaration sites
 //                            (default: no; requires debug info such as -g).
 //                            Text appends (source-file:line) to the name;
 //                            JSON enables symbolDetails and adds an interned
@@ -482,12 +482,13 @@ public:
         }
         continue;
       }
-      if (Key == "usedwarf") {
+      if (Key == "use_dwarf") {
         if (!parseYesNo(Value, UseDWARF)) {
           HasError = true;
-          getLinker()->reportDiag(getLinker()->getErrorDiagID(
-              "CrossReference's usedwarf option must be 'yes' or "
-              "'no', got '%0'"),
+          getLinker()->reportDiag(
+              getLinker()->getErrorDiagID(
+                  "CrossReference's use_dwarf option must be 'yes' or "
+                  "'no', got '%0'"),
               Value);
           return;
         }
@@ -1484,7 +1485,7 @@ private:
   }
 
   // Populates SymbolSourceLoc (symbol -> declaring source file + line) from
-  // DWARF debug info, when usedwarf=yes. For each input file that defines at
+  // DWARF debug info, when use_dwarf=yes. For each input file that defines at
   // least one exported symbol, parse DWARF once in a bounded per-file batch.
   // Only matching subprogram/variable names are retained. A worker releases its
   // reader before returning locations; the serial merge interns cleaned paths.
@@ -1627,7 +1628,7 @@ private:
            "<output-section>\n";
     Out << "#   '?' address means garbage-collected; section is the linked "
            "output section.\n";
-    Out << "#   with usedwarf=yes, source appears after the name as "
+    Out << "#   with use_dwarf=yes, source appears after the name as "
            "(file:line).\n";
     for (uint32_t ID = 0; ID < PrintedSymbols.size(); ++ID)
       Out << ID << "\t" << qualifySymbol(PrintedSymbols[ID]) << "\t"
