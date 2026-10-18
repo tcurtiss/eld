@@ -92,16 +92,18 @@
 //                            (default: no; names are printed exactly as
 //                            they appear in the symbol table, e.g. mangled
 //                            for C++).
-//   symbol_details=yes|no -- add symbol identities and attributed reference
-//                            pairs to either JSON format (default: no).
-//   use_dwarf=yes|no      -- index function and variable declaration sites
-//                            (default: no; requires debug info such as -g).
-//                            Text appends (source-file:line) to the name;
-//                            JSON enables symbolDetails and adds an interned
-//                            sourceFiles table with sourceFile/sourceLine.
-//                            Missing or ambiguous mappings remain unavailable.
-//                            Per-file object-aware readers resolve debug
-//                            relocations and are released after each worker.
+//   symbol_details=none|elf|dwarf
+//                          -- choose additional symbol metadata (default:
+//                            none). "elf" adds symbol identities and
+//                            attributed reference pairs to JSON. "dwarf"
+//                            additionally indexes function and variable
+//                            declaration sites (requires debug info such as
+//                            -g), appends (source-file:line) in text, and
+//                            adds sourceFile/sourceLine metadata to JSON.
+//                            Missing or ambiguous mappings remain
+//                            unavailable. Per-file object-aware readers
+//                            resolve debug relocations and are released after
+//                            each worker.
 //   exclude_symbols=<globs> -- comma-delimited list of glob patterns (see
 //                            llvm::GlobPattern); a symbol is omitted from
 //                            the dump, and from any edge it would otherwise
@@ -186,6 +188,7 @@ namespace {
 enum class AttributionKind : uint8_t { Exact, NearestPreceding, Unattributed };
 
 enum class OutputFormat : uint8_t { Text, DashboardObject, DashboardColumnar };
+enum class SymbolDetailLevel : uint8_t { None, ELF, DWARF };
 
 // A symbol together with its offset and size within the chunk that defines
 // it, used to build a per-chunk, offset-sorted index for referrer lookup.
@@ -482,25 +485,19 @@ public:
         }
         continue;
       }
-      if (Key == "use_dwarf") {
-        if (!parseYesNo(Value, UseDWARF)) {
-          HasError = true;
-          getLinker()->reportDiag(
-              getLinker()->getErrorDiagID(
-                  "CrossReference's use_dwarf option must be 'yes' or "
-                  "'no', got '%0'"),
-              Value);
-          return;
-        }
-        continue;
-      }
       if (Key == "symbol_details") {
-        if (!parseYesNo(Value, SymbolDetails)) {
+        if (Value == "none") {
+          SymbolDetails = SymbolDetailLevel::None;
+        } else if (Value == "elf") {
+          SymbolDetails = SymbolDetailLevel::ELF;
+        } else if (Value == "dwarf") {
+          SymbolDetails = SymbolDetailLevel::DWARF;
+        } else {
           HasError = true;
           getLinker()->reportDiag(
               getLinker()->getErrorDiagID(
-                  "CrossReference's symbol_details option must be 'yes' or "
-                  "'no', got '%0'"),
+                  "CrossReference's symbol_details option must be 'none', "
+                  "'elf', or 'dwarf', got '%0'"),
               Value);
           return;
         }
@@ -648,7 +645,7 @@ public:
           getLinker()->isTimingEnabled()));
       computeIncomingRefCounts();
     }
-    if (UseDWARF) {
+    if (wantDWARF()) {
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference buildDWARFIndex", "CrossReference",
           getLinker()->isTimingEnabled()));
@@ -742,7 +739,17 @@ private:
   }
 
   bool wantSymbolDetails() const {
-    return Format != OutputFormat::Text && (SymbolDetails || UseDWARF);
+    return Format != OutputFormat::Text &&
+           SymbolDetails != SymbolDetailLevel::None;
+  }
+
+  bool wantDWARF() const { return SymbolDetails == SymbolDetailLevel::DWARF; }
+
+  // A DWARF request that yields no usable declaration location has the same
+  // JSON schema as symbol_details=elf. This keeps consumers from having to
+  // distinguish an empty DWARF table from ELF-only metadata.
+  bool hasDWARFDetails() const {
+    return wantDWARF() && !SymbolSourceLoc.empty();
   }
 
   void buildDashboardSymbols() {
@@ -1485,8 +1492,9 @@ private:
   }
 
   // Populates SymbolSourceLoc (symbol -> declaring source file + line) from
-  // DWARF debug info, when use_dwarf=yes. For each input file that defines at
-  // least one exported symbol, parse DWARF once in a bounded per-file batch.
+  // DWARF debug info, when symbol_details=dwarf. For each input file that
+  // defines at least one exported symbol, parse DWARF once in a bounded
+  // per-file batch.
   // Only matching subprogram/variable names are retained. A worker releases its
   // reader before returning locations; the serial merge interns cleaned paths.
   // Missing or ambiguous declarations have no source location.
@@ -1555,7 +1563,7 @@ private:
     if (CppDemangle)
       Name = portable::demangle(Name);
     OS << Name;
-    if (UseDWARF) {
+    if (wantDWARF()) {
       auto It = SymbolSourceLoc.find(Sym);
       if (It != SymbolSourceLoc.end())
         OS << " (" << SourceFiles[It->second.File] << ":" << std::dec
@@ -1628,7 +1636,7 @@ private:
            "<output-section>\n";
     Out << "#   '?' address means garbage-collected; section is the linked "
            "output section.\n";
-    Out << "#   with use_dwarf=yes, source appears after the name as "
+    Out << "#   with symbol_details=dwarf, source appears after the name as "
            "(file:line).\n";
     for (uint32_t ID = 0; ID < PrintedSymbols.size(); ++ID)
       Out << ID << "\t" << qualifySymbol(PrintedSymbols[ID]) << "\t"
@@ -1696,7 +1704,7 @@ private:
     };
     JSON.attributeObject("symbolDetails", [&] {
       JSON.attribute("version", 1);
-      if (UseDWARF)
+      if (hasDWARFDetails())
         JSON.attributeArray("sourceFiles", [&] {
           for (const std::string &File : SourceFiles)
             JSON.value(File);
@@ -1721,7 +1729,7 @@ private:
                  [](const auto &S) { return S.Handle.getOffsetInChunk(); });
           Column("size", [](const auto &S) { return S.Handle.getSize(); });
           Column("flags", [&](const auto &S) { return Flags(S.Handle); });
-          if (UseDWARF) {
+          if (hasDWARFDetails()) {
             Column("sourceFile", [&](const auto &S) {
               return SignedID(Location(S.Handle).File);
             });
@@ -2053,8 +2061,7 @@ private:
   bool HasError = false;
   bool ShowGC = false;
   bool CppDemangle = false;
-  bool UseDWARF = false;
-  bool SymbolDetails = false;
+  SymbolDetailLevel SymbolDetails = SymbolDetailLevel::None;
   bool Gzip = false;
   bool CoalesceDirs = false;
   OutputFormat Format = OutputFormat::Text;
