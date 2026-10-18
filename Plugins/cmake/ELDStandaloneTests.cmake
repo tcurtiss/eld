@@ -3,6 +3,14 @@
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  add_test(NAME ELDStandalone.RuntimeConfiguration
+    COMMAND "${CMAKE_COMMAND}"
+      "-DRUNTIME_MODULE=${CMAKE_CURRENT_LIST_DIR}/ELDStandalone.cmake"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/runtime-config-test"
+      -P "${CMAKE_CURRENT_LIST_DIR}/tests/PackageRuntime.cmake")
+endif()
+
 find_program(ELD_TARGET_CXX
   NAMES clang++ hexagon-clang++ clang hexagon-clang
   PATHS "${ELD_TOOLS_DIR}/bin" NO_DEFAULT_PATH
@@ -47,6 +55,9 @@ set(ELD_TEST_TARGET "" CACHE STRING
   "Override the lit architecture derived from ELD_TARGET_TRIPLE")
 
 set(ELD_RUNTIME_DIR "${ELD_LIBRARY_DIR}")
+if(ELD_PACKAGE_CXX_RUNTIME_DIR)
+  set(ELD_RUNTIME_DIR "${ELD_PACKAGE_CXX_RUNTIME_DIR}")
+endif()
 if(WIN32)
   get_filename_component(ELD_RUNTIME_DIR "${ELD_RUNTIME_LIBRARY}" DIRECTORY)
 endif()
@@ -91,6 +102,13 @@ function(eld_add_standalone_test)
       OR NOT TARGET "${TEST_TARGET}")
     message(FATAL_ERROR
       "eld_add_standalone_test requires NAME, TARGET, and SCRIPT")
+  endif()
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_READELF)
+    add_test(NAME "ELDStandaloneRuntime.${TEST_NAME}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPLUGIN_LIBRARY=$<TARGET_FILE:${TEST_TARGET}>"
+        "-DREADELF=${CMAKE_READELF}"
+        -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/tests/NoRuntimePath.cmake")
   endif()
   add_test(NAME "ELDStandalone.${TEST_NAME}"
     COMMAND "${Python3_EXECUTABLE}" "${TEST_SCRIPT}"
