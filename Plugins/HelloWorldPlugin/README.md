@@ -62,6 +62,13 @@ cmake --build build-helloworld
 ```
 
 The host compiler and C++ runtime must match the installed ELD ABI.
+On Linux, the standalone framework automatically selects the package's host libc++
+libraries for compiler probes and plugin links, avoiding accidental system
+runtime selection. The host's default libc++ can introduce ABI or unwinder
+dependencies incompatible with the ELD linker's packaged runtime, even if the
+plugin links successfully. The framework does not select headers or embed
+RPATH/RUNPATH; the loading environment must supply runtime library paths. See the
+[runtime configuration guide](../README.md#package-c-runtime-libraries-linux).
 CMAKE_CXX_FLAGS also applies during CMake's compiler checks. Do not use a
 target compiler to build the host plugin. Conventional include/lib/bin and
 Tools/include, Tools/lib, Tools/bin package layouts are both supported.

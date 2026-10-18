@@ -10,10 +10,11 @@ if(BUILD_STANDALONE_PLUGINS)
   endif()
   # Use CMAKE_CXX_COMPILER and CMAKE_CXX_FLAGS (or a host toolchain file).
   # In particular, libc++ must be selected before project() tests the compiler.
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ELDStandalone.cmake")
   project(ELDStandalonePlugins LANGUAGES CXX)
   list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
   find_package(ELD REQUIRED MODULE)
-  include(ELDStandalone)
+  eld_check_standalone_runtime()
   option(BUILD_TESTING "Enable standalone plugin tests" OFF)
   option(ELD_ENABLE_LIT_TESTS "Register standalone plugin lit tests" OFF)
   if(ELD_ENABLE_LIT_TESTS AND NOT BUILD_TESTING)

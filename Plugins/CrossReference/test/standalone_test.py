@@ -43,8 +43,8 @@ def main():
                    "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else
                    "LD_LIBRARY_PATH")
     runtime_dirs = [str(plugin_dir),
-                    args.library_dir or str(tools_dir / "lib"),
                     args.runtime_dir or str(tools_dir / "bin"),
+                    args.library_dir or str(tools_dir / "lib"),
                     env.get(runtime_var, "")]
     env[runtime_var] = os.pathsep.join(path for path in runtime_dirs if path)
 
