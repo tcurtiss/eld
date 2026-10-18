@@ -13,6 +13,10 @@ RUN: %clang %clangopts -c %p/Inputs/1.s -o %t1.1.o
 RUN: rm -f xref_approx_dump.txt
 RUN: %link %linkopts %t1.1.o -e foo -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_approx_dump.txt %s --check-prefix=DUMP
+RUN: %python %p/../CrossReferenceDetails/check.py configs %t.details
+RUN: %clang %clangopts -c %p/Inputs/unattributed.s -o %t.unknown.o
+RUN: %link %linkopts %t1.1.o %t.unknown.o -e foo -o %t1.out --plugin-config %t.details/detail.yaml
+RUN: %python %p/../CrossReferenceDetails/check.py approx %t.details
 RUN: rm -f xref_approx_dump.txt
 #END_TEST
 

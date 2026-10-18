@@ -41,9 +41,9 @@
 //     to that symbol exactly.
 //   - Otherwise, the nearest preceding symbol (by offset) in the same chunk
 //     is used as a best-effort guess, and the edge gets an "approx" flag in
-//     text output (or "referrerKind": "approx" in JSON). This fallback
-//     matters for chunks whose symbols have no reliable size information
-//     (e.g. hand-written assembly without .size directives).
+//     text output (or flag 0x1 in JSON symbolDetails references). This
+//     fallback matters for chunks whose symbols have no reliable size
+//     information (e.g. hand-written assembly without .size directives).
 //   - If no symbol precedes the relocation's offset in its chunk at all,
 //     the referrer is recorded as an unattributed edge.
 //
@@ -92,33 +92,16 @@
 //                            (default: no; names are printed exactly as
 //                            they appear in the symbol table, e.g. mangled
 //                            for C++).
-//   usedwarf=yes|no      -- whether to look up each symbol's defining
-//                            source file and line number from DWARF debug
-//                            info (default: no; requires the input file to
-//                            have been compiled with debug info, e.g. -g).
-//                            When available, this is appended to the symbol
-//                            name as "(source-file:line)" in a text-format
-//                            symbol, and added to a JSON-format symbol as
-//                            "sourceFile"/
-//                            "sourceLine" fields; when unavailable (no debug
-//                            info, or no matching subprogram/variable DIE), it is
-//                            simply omitted.
-//
-//                            Caveat: this reads DWARF directly from each
-//                            input file's unrelocated bytes, so any name
-//                            stored via a relocated string form (DW_FORM_strp
-//                            into .debug_str, or DW_FORM_strx into
-//                            .debug_str_offsets -- the default for DW_AT_name
-//                            and DW_AT_decl_file with plain "-g" on most
-//                            targets) resolves to the wrong string, since the
-//                            relocation that would point it at the right
-//                            offset is never applied to non-alloc debug
-//                            sections during linking. This is a limitation of
-//                            ELD's DWARF plugin API, not of this plugin.
-//                            Compiling with a fixed abbreviation form that
-//                            stores these strings inline (e.g. clang's
-//                            "-gdwarf-2 -mllvm -dwarf-inlined-strings=Enable")
-//                            avoids the affected forms and resolves correctly.
+//   symbol_details=yes|no -- add symbol identities and attributed reference
+//                            pairs to either JSON format (default: no).
+//   usedwarf=yes|no      -- index function and variable declaration sites
+//                            (default: no; requires debug info such as -g).
+//                            Text appends (source-file:line) to the name;
+//                            JSON enables symbolDetails and adds an interned
+//                            sourceFiles table with sourceFile/sourceLine.
+//                            Missing or ambiguous mappings remain unavailable.
+//                            Per-file object-aware readers resolve debug
+//                            relocations and are released after each worker.
 //   exclude_symbols=<globs> -- comma-delimited list of glob patterns (see
 //                            llvm::GlobPattern); a symbol is omitted from
 //                            the dump, and from any edge it would otherwise
@@ -174,10 +157,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../Support/PluginPortable.h"
+#include "../Support/PluginThreadPool.h"
 #include "LinkerPlugin.h"
 #include "PluginVersion.h"
-#include "../Support/PluginThreadPool.h"
-#include "../Support/PluginPortable.h"
+#include "SourceLocations.h"
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -209,6 +193,9 @@ struct SymbolOffset {
   Symbol Sym;
   off_t Offset;
   uint32_t Size;
+  // Index of the longest-reaching range in this prefix (relative to its chunk).
+  // Fits in the record's alignment padding on 64-bit hosts.
+  uint32_t MaxEndIndex = 0;
 };
 
 struct ChunkSymbolRange {
@@ -218,10 +205,7 @@ struct ChunkSymbolRange {
 
 // A symbol's DWARF-derived declaration site, as looked up by name from the
 // subprogram or variable DIEs of its defining input file's compile units.
-struct SourceLoc {
-  std::string File;
-  uint64_t Line;
-};
+using crossreference::SourceLoc;
 
 struct DashboardSection {
   Section Handle;
@@ -509,6 +493,18 @@ public:
         }
         continue;
       }
+      if (Key == "symbol_details") {
+        if (!parseYesNo(Value, SymbolDetails)) {
+          HasError = true;
+          getLinker()->reportDiag(
+              getLinker()->getErrorDiagID(
+                  "CrossReference's symbol_details option must be 'yes' or "
+                  "'no', got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
       if (Key == "exclude_symbols") {
         if (!parseGlobList(Value, ExcludeSymbolPatterns))
           return;
@@ -631,7 +627,9 @@ public:
           getLinker()->isTimingEnabled()));
       DashboardPathCompressor.build(DashboardPaths);
     }
-    if (Format == OutputFormat::Text) {
+    if (wantSymbolDetails())
+      buildDashboardSymbols();
+    if (Format == OutputFormat::Text || wantSymbolDetails()) {
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference buildChunkSymbolIndex", "CrossReference",
           getLinker()->isTimingEnabled()));
@@ -649,7 +647,7 @@ public:
           getLinker()->isTimingEnabled()));
       computeIncomingRefCounts();
     }
-    if (UseDWARF && Format == OutputFormat::Text) {
+    if (UseDWARF) {
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference buildDWARFIndex", "CrossReference",
           getLinker()->isTimingEnabled()));
@@ -687,6 +685,34 @@ private:
     uint8_t Flags = 0;
   };
 
+  struct SymbolEdgeKey {
+    uint32_t SourceSection, TargetSection, Source, Target;
+    auto fields() const {
+      return std::tie(SourceSection, TargetSection, Source, Target);
+    }
+    bool operator==(const SymbolEdgeKey &Other) const {
+      return fields() == Other.fields();
+    }
+    bool operator<(const SymbolEdgeKey &Other) const {
+      return fields() < Other.fields();
+    }
+  };
+  struct SymbolEdgeHash {
+    size_t operator()(const SymbolEdgeKey &K) const {
+      size_t H = K.SourceSection;
+      for (uint32_t V : {K.TargetSection, K.Source, K.Target})
+        H ^= V + size_t(0x9e3779b9) + (H << 6) + (H >> 2);
+      return H;
+    }
+  };
+  using SymbolEdgeMap =
+      std::unordered_map<SymbolEdgeKey, EdgeInfo, SymbolEdgeHash>;
+  struct DashboardSymbol {
+    Symbol Handle;
+    uint32_t SectionID;
+    uint32_t ChunkID;
+  };
+
   struct ReferenceWorkResult {
     // The high and low 32-bit fields contain referrer-id + 1 and
     // target-id + 1 respectively. A zero high field represents an
@@ -694,6 +720,7 @@ private:
     // their hash state into every temporary edge entry.
     std::unordered_map<uint64_t, EdgeInfo> Edges;
     std::unordered_map<uint64_t, uint64_t> DashboardEdgeCounts;
+    SymbolEdgeMap SymbolEdges;
   };
 
   struct StubWorkResult {
@@ -711,6 +738,28 @@ private:
       return 1;
     return std::max<size_t>(
         1, std::min<size_t>(WorkItems, getLinker()->getPluginThreadCount()));
+  }
+
+  bool wantSymbolDetails() const {
+    return Format != OutputFormat::Text && (SymbolDetails || UseDWARF);
+  }
+
+  void buildDashboardSymbols() {
+    std::unordered_map<Chunk, uint32_t> Chunks;
+    for (Symbol &Sym : AllSymbols) {
+      if (!Sym || Sym.isUndef() || Sym.isSection() || Sym.isFile())
+        continue;
+      Chunk C = Sym.getChunk();
+      if (!C)
+        continue;
+      auto It = DashboardSectionIds.find(C.getSection());
+      if (It == DashboardSectionIds.end())
+        continue;
+      if (SymbolIDs.emplace(Sym, DashboardSymbols.size()).second) {
+        auto ChunkID = Chunks.emplace(C, Chunks.size()).first->second;
+        DashboardSymbols.push_back({Sym, It->second, ChunkID});
+      }
+    }
   }
 
   template <typename Function>
@@ -1138,6 +1187,15 @@ private:
     OutSym = Best->Sym;
     if (SiteOffset < Best->Offset + static_cast<off_t>(Best->Size))
       return AttributionKind::Exact;
+    // Debug/mapping labels inside a function often have size zero. They must
+    // not hide a containing function/data range. The prefix index answers this
+    // in constant time after the binary search, without a backwards scan.
+    const SymbolOffset &Containing = Sorted[std::prev(It)->MaxEndIndex];
+    if (SiteOffset < Containing.Offset + static_cast<off_t>(Containing.Size) &&
+        (!SkipLocal || !Containing.Sym.isLocal())) {
+      OutSym = Containing.Sym;
+      return AttributionKind::Exact;
+    }
     return AttributionKind::NearestPreceding;
   }
 
@@ -1151,35 +1209,60 @@ private:
   void buildChunkSymbolIndex() {
     ChunkSymbolsCache.clear();
     ChunkSymbolIndex.clear();
-    ChunkSymbolIndex.reserve(AllSymbols.size());
-
-    std::unordered_map<Chunk, std::vector<SymbolOffset>> Temporary;
+    // Count and fill a single contiguous allocation. A vector allocation for
+    // every one-function chunk costs more than its actual symbol record.
+    size_t Count = 0;
     for (Symbol &Sym : AllSymbols) {
       Chunk C = Sym.getChunk();
       if (!C)
         continue;
-      Temporary[C].push_back({Sym, Sym.getOffsetInChunk(), Sym.getSize()});
+      ++ChunkSymbolsCache[C].End;
+      ++Count;
     }
-    std::vector<std::vector<SymbolOffset> *> SortWork;
-    SortWork.reserve(Temporary.size());
-    for (auto &Entry : Temporary)
-      SortWork.push_back(&Entry.second);
-
+    uint32_t Next = 0;
+    for (auto &Entry : ChunkSymbolsCache) {
+      uint32_t Length = Entry.second.End;
+      Entry.second = {Next, Next};
+      Next += Length;
+    }
+    ChunkSymbolIndex.resize(Count, {Symbol(nullptr), 0, 0});
+    for (Symbol &Sym : AllSymbols) {
+      Chunk C = Sym.getChunk();
+      if (C)
+        ChunkSymbolIndex[ChunkSymbolsCache.find(C)->second.End++] = {
+            Sym, Sym.getOffsetInChunk(), Sym.getSize()};
+    }
+    std::vector<ChunkSymbolRange> SortWork;
+    SortWork.reserve(ChunkSymbolsCache.size());
+    for (const auto &Entry : ChunkSymbolsCache)
+      SortWork.push_back(Entry.second);
     forEachWorkItem(SortWork.size(), [&](size_t I) {
-      std::vector<SymbolOffset> *Symbols = SortWork[I];
-      std::sort(Symbols->begin(), Symbols->end(),
+      auto Range = SortWork[I];
+      std::sort(ChunkSymbolIndex.begin() + Range.Begin,
+                ChunkSymbolIndex.begin() + Range.End,
                 [](const SymbolOffset &A, const SymbolOffset &B) {
-                  return A.Offset < B.Offset;
+                  if (A.Offset != B.Offset)
+                    return A.Offset < B.Offset;
+                  // upper_bound chooses the last equal-offset symbol. Prefer
+                  // typed symbols to section/mapping labels, deterministically.
+                  auto Rank = [](Symbol S) {
+                    return (S.isFunction() || S.isObject() ? 2 : 0) +
+                           (!S.isLocal() ? 1 : 0);
+                  };
+                  if (Rank(A.Sym) != Rank(B.Sym))
+                    return Rank(A.Sym) < Rank(B.Sym);
+                  return A.Sym.getName() < B.Sym.getName();
                 });
+      uint32_t Max = Range.Begin;
+      for (uint32_t J = Range.Begin; J < Range.End; ++J) {
+        const auto &Current = ChunkSymbolIndex[J];
+        const auto &Previous = ChunkSymbolIndex[Max];
+        if (Current.Offset + static_cast<off_t>(Current.Size) >=
+            Previous.Offset + static_cast<off_t>(Previous.Size))
+          Max = J;
+        ChunkSymbolIndex[J].MaxEndIndex = Max - Range.Begin;
+      }
     });
-
-    for (auto &Entry : Temporary) {
-      uint32_t Begin = ChunkSymbolIndex.size();
-      ChunkSymbolIndex.insert(ChunkSymbolIndex.end(), Entry.second.begin(),
-                              Entry.second.end());
-      uint32_t End = ChunkSymbolIndex.size();
-      ChunkSymbolsCache.emplace(Entry.first, ChunkSymbolRange{Begin, End});
-    }
   }
 
   // Returns the offset-sorted symbol list for the chunk that defines Sym, as
@@ -1236,11 +1319,11 @@ private:
         Symbol ReferrerSym(nullptr);
         Section SrcSection = SrcChunk.getSection();
         uint8_t EdgeFlags = 0;
-        if (Format == OutputFormat::Text) {
+        if (Format == OutputFormat::Text || wantSymbolDetails()) {
           portable::ArrayRef<SymbolOffset> Sorted = getSortedSymbols(SrcChunk);
-          AttributionKind Kind =
-              findReferrer(Sorted, U.getOffsetInChunk(), ExcludeLocal,
-                           ReferrerSym);
+          AttributionKind Kind = findReferrer(
+              Sorted, U.getOffsetInChunk(),
+              Format == OutputFormat::Text && ExcludeLocal, ReferrerSym);
           if (Kind == AttributionKind::Unattributed)
             EdgeFlags |= EdgeUnattributed;
           else if (Kind == AttributionKind::NearestPreceding)
@@ -1290,6 +1373,19 @@ private:
         Section DstSection = TargetChunk.getSection();
         auto SrcIt = DashboardSectionIds.find(SrcSection);
         auto DstIt = DashboardSectionIds.find(DstSection);
+        if (wantSymbolDetails() && SrcIt != DashboardSectionIds.end() &&
+            DstIt != DashboardSectionIds.end()) {
+          auto ID = [&](Symbol Sym) {
+            auto It = SymbolIDs.find(Sym);
+            return It == SymbolIDs.end() ? UINT32_MAX : It->second;
+          };
+          uint32_t Source = ID(ReferrerSym);
+          EdgeInfo &Info = Result.SymbolEdges[{SrcIt->second, DstIt->second,
+                                               Source, ID(TargetSym)}];
+          ++Info.Count;
+          Info.Flags |=
+              EdgeFlags | (Source == UINT32_MAX ? EdgeUnattributed : 0);
+        }
         if (SrcIt != DashboardSectionIds.end() &&
             DstIt != DashboardSectionIds.end() &&
             SrcIt->second != DstIt->second) {
@@ -1309,23 +1405,35 @@ private:
       if (IF.hasInputFile() && !IF.isBitcode())
         InputFiles.push_back(IF);
 
-    std::vector<ReferenceWorkResult> Results(InputFiles.size());
-    forEachWorkItem(InputFiles.size(), [&](size_t I) {
-      walkReferencesForInputFile(InputFiles[I], Results[I]);
-    });
-
     std::unordered_map<uint64_t, EdgeInfo> EdgeCounts;
-    for (ReferenceWorkResult &Result : Results) {
-      for (const auto &Entry : Result.Edges) {
-        EdgeInfo &Info = EdgeCounts[Entry.first];
-        Info.Count += Entry.second.Count;
-        Info.Flags |= Entry.second.Flags;
+    SymbolEdgeMap DetailedCounts;
+    // Bound transient per-file edge maps; merge in input order for reproducible
+    // results regardless of worker scheduling.
+    size_t BatchSize = 2 * workerCount(InputFiles.size());
+    for (size_t Begin = 0; Begin < InputFiles.size(); Begin += BatchSize) {
+      size_t Count = std::min(BatchSize, InputFiles.size() - Begin);
+      std::vector<ReferenceWorkResult> Results(Count);
+      forEachWorkItem(Count, [&](size_t I) {
+        walkReferencesForInputFile(InputFiles[Begin + I], Results[I]);
+      });
+      for (ReferenceWorkResult &Result : Results) {
+        for (const auto &Entry : Result.Edges) {
+          EdgeInfo &Info = EdgeCounts[Entry.first];
+          Info.Count += Entry.second.Count;
+          Info.Flags |= Entry.second.Flags;
+        }
+        for (const auto &Entry : Result.DashboardEdgeCounts)
+          DashboardEdgeCounts[Entry.first] += Entry.second;
+        for (const auto &Entry : Result.SymbolEdges) {
+          EdgeInfo &Info = DetailedCounts[Entry.first];
+          Info.Count += Entry.second.Count;
+          Info.Flags |= Entry.second.Flags;
+        }
       }
-      for (const auto &Entry : Result.DashboardEdgeCounts)
-        DashboardEdgeCounts[Entry.first] += Entry.second;
-      Result.Edges.clear();
-      Result.DashboardEdgeCounts.clear();
     }
+    DetailedEdges.assign(DetailedCounts.begin(), DetailedCounts.end());
+    std::sort(DetailedEdges.begin(), DetailedEdges.end(),
+              [](const auto &A, const auto &B) { return A.first < B.first; });
     Edges.reserve(EdgeCounts.size());
     for (const auto &Entry : EdgeCounts)
       Edges.push_back(
@@ -1337,10 +1445,10 @@ private:
     if (Format == OutputFormat::Text) {
       SymbolIDs.clear();
       SymbolIDs.rehash(0);
-      ChunkSymbolsCache.clear();
-      ChunkSymbolsCache.rehash(0);
-      std::vector<SymbolOffset>().swap(ChunkSymbolIndex);
     }
+    ChunkSymbolsCache.clear();
+    ChunkSymbolsCache.rehash(0);
+    std::vector<SymbolOffset>().swap(ChunkSymbolIndex);
   }
 
   // Collects symbols directly from each input file's own symbol table
@@ -1377,84 +1485,57 @@ private:
 
   // Populates SymbolSourceLoc (symbol -> declaring source file + line) from
   // DWARF debug info, when usedwarf=yes. For each input file that defines at
-  // least one collected symbol, this parses its DWARF (if present) once and
-  // indexes every subprogram and variable DIE by name; each of that file's
-  // symbols is then looked up by name in that index. Symbols with no debug info, or
-  // whose input file has none, simply have no entry and are reported without
-  // source location, same as before this option existed.
+  // least one exported symbol, parse DWARF once in a bounded per-file batch.
+  // Only matching subprogram/variable names are retained. A worker releases its
+  // reader before returning locations; the serial merge interns cleaned paths.
+  // Missing or ambiguous declarations have no source location.
   void buildDWARFIndex() {
     SymbolSourceLoc.clear();
+    SourceFiles.clear();
     std::vector<InputFile> InputFiles;
     std::unordered_map<InputFile, size_t> InputFileIDs;
+    std::vector<std::vector<Symbol>> Wanted;
     for (Symbol &Sym : AllSymbols) {
+      if (Format == OutputFormat::Text ? isExcluded(Sym)
+                                       : SymbolIDs.find(Sym) == SymbolIDs.end())
+        continue;
       InputFile IF = Sym.getInputFile();
       if (!IF)
         continue;
-      if (InputFileIDs.find(IF) == InputFileIDs.end()) {
-        size_t ID = InputFiles.size();
-        InputFileIDs.emplace(IF, ID);
+      auto It = InputFileIDs.emplace(IF, InputFiles.size());
+      if (It.second) {
         InputFiles.push_back(IF);
+        Wanted.emplace_back();
+      }
+      Wanted[It.first->second].push_back(Sym);
+    }
+    std::unordered_map<std::string, uint32_t> FileIDs;
+    size_t BatchSize = 2 * workerCount(InputFiles.size());
+    for (size_t Begin = 0; Begin < InputFiles.size(); Begin += BatchSize) {
+      size_t Count = std::min(BatchSize, InputFiles.size() - Begin);
+      std::vector<crossreference::FileSources> Results(Count);
+      forEachWorkItem(Count, [&](size_t I) {
+        Results[I] = crossreference::readSourceLocations(InputFiles[Begin + I],
+                                                         Wanted[Begin + I]);
+        std::vector<Symbol>().swap(Wanted[Begin + I]);
+      });
+      // Only this serial merge normalizes/interns paths. outputPath owns a
+      // mutable cache, so it must never be called from DWARF worker threads.
+      for (const auto &Result : Results) {
+        std::vector<uint32_t> IDs;
+        IDs.reserve(Result.Files.size());
+        for (const std::string &File : Result.Files) {
+          std::string Path = outputPath(File);
+          auto It = FileIDs.emplace(Path, SourceFiles.size());
+          if (It.second)
+            SourceFiles.push_back(std::move(Path));
+          IDs.push_back(It.first->second);
+        }
+        for (const auto &Entry : Result.Locations)
+          SymbolSourceLoc.emplace(Entry.first, SourceLoc{IDs[Entry.second.File],
+                                                         Entry.second.Line});
       }
     }
-
-    using NamedDIEIndex = std::unordered_map<std::string, SourceLoc>;
-    std::vector<std::unordered_set<std::string>> WantedNames(InputFiles.size());
-    for (Symbol &Sym : AllSymbols) {
-      auto FileIt = InputFileIDs.find(Sym.getInputFile());
-      if (FileIt == InputFileIDs.end() || isExcluded(Sym))
-        continue;
-      WantedNames[FileIt->second].insert(Sym.getName());
-    }
-
-    std::vector<NamedDIEIndex> PerFileNamedDIEs(InputFiles.size());
-    forEachWorkItem(InputFiles.size(), [&](size_t I) {
-      PerFileNamedDIEs[I] =
-          indexNamedDIEsByName(InputFiles[I], WantedNames[I]);
-    });
-
-    for (Symbol &Sym : AllSymbols) {
-      InputFile IF = Sym.getInputFile();
-      auto FileIt = InputFileIDs.find(IF);
-      if (FileIt == InputFileIDs.end())
-        continue;
-      auto NameIt = PerFileNamedDIEs[FileIt->second].find(Sym.getName());
-      if (NameIt != PerFileNamedDIEs[FileIt->second].end())
-        SymbolSourceLoc.emplace(Sym, NameIt->second);
-    }
-  }
-
-  // Parses IF's DWARF debug info (if any) and returns a map from each
-  // subprogram or variable DIE's name to its declaring source file + line,
-  // across every compile unit in the file. Returns an empty map if IF has no
-  // DWARF context (e.g. it was not compiled with debug info). Only names in
-  // WantedNames are indexed; symbols filtered from the text dump do not need
-  // DWARF source locations.
-  std::unordered_map<std::string, SourceLoc>
-  indexNamedDIEsByName(InputFile &IF,
-                      const std::unordered_set<std::string> &WantedNames) {
-    std::unordered_map<std::string, SourceLoc> Index;
-    if (WantedNames.empty())
-      return Index;
-    eld::Expected<DWARFInfo> ExpDI =
-        getLinker()->getDWARFInfoForInputFile(IF, getLinker()->is32Bits());
-    if (!ExpDI) {
-      getLinker()->reportDiagEntry(std::move(ExpDI.error()));
-      return Index;
-    }
-    DWARFInfo DI = ExpDI.value();
-    if (!DI.hasDWARFContext())
-      return Index;
-    for (DWARFUnit &DU : DI.getDWARFUnits()) {
-      for (DWARFDie &Die : DU.getDIEs()) {
-        if (!Die.isSubprogramDIE() && !Die.isVariable())
-          continue;
-        std::string Name = Die.getName();
-        if (Name.empty() || WantedNames.find(Name) == WantedNames.end())
-          continue;
-        Index.emplace(Name, SourceLoc{Die.getDeclFile(), Die.getDeclLine()});
-      }
-    }
-    return Index;
   }
 
   // Local symbols with the same name can appear in different input files
@@ -1476,7 +1557,7 @@ private:
     if (UseDWARF) {
       auto It = SymbolSourceLoc.find(Sym);
       if (It != SymbolSourceLoc.end())
-        OS << " (" << outputPath(It->second.File) << ":" << std::dec
+        OS << " (" << SourceFiles[It->second.File] << ":" << std::dec
            << It->second.Line << ")";
     }
     OS << "\t" << outputPath(Sym.getResolvedPath()) << "\t0x" << std::hex
@@ -1595,6 +1676,113 @@ private:
     return "code";
   }
 
+  // Additive, independently versioned metadata. Section sizes/edges remain
+  // unchanged: symbol sizes can overlap (aliases) and must not be summed.
+  void writeSymbolDetails(portable::JSONWriter &JSON, bool Columnar) {
+    if (!wantSymbolDetails())
+      return;
+    auto SignedID = [](uint32_t ID) -> int64_t {
+      return ID == UINT32_MAX ? int64_t(-1) : int64_t(ID);
+    };
+    auto Flags = [](Symbol S) {
+      return (S.isLocal() ? 1 : 0) | (S.isWeak() ? 2 : 0) |
+             (S.isFunction() ? 4 : 0) | (S.isObject() ? 8 : 0);
+    };
+    auto Location = [&](Symbol S) {
+      auto It = SymbolSourceLoc.find(S);
+      return It == SymbolSourceLoc.end() ? SourceLoc{UINT32_MAX, 0}
+                                         : It->second;
+    };
+    JSON.attributeObject("symbolDetails", [&] {
+      JSON.attribute("version", 1);
+      if (UseDWARF)
+        JSON.attributeArray("sourceFiles", [&] {
+          for (const std::string &File : SourceFiles)
+            JSON.value(File);
+        });
+      if (Columnar) {
+        JSON.attributeObject("symbols", [&] {
+          JSON.attribute("count",
+                         static_cast<uint32_t>(DashboardSymbols.size()));
+          auto Column = [&](const char *Key, auto Value) {
+            JSON.attributeArray(Key, [&] {
+              for (const DashboardSymbol &S : DashboardSymbols)
+                JSON.value(Value(S));
+            });
+          };
+          Column("section", [](const auto &S) { return S.SectionID; });
+          Column("chunk", [](const auto &S) { return S.ChunkID; });
+          Column("name",
+                 [&](const auto &S) { return symbolDisplayName(S.Handle); });
+          Column("linkageName",
+                 [](const auto &S) { return S.Handle.getName(); });
+          Column("offset",
+                 [](const auto &S) { return S.Handle.getOffsetInChunk(); });
+          Column("size", [](const auto &S) { return S.Handle.getSize(); });
+          Column("flags", [&](const auto &S) { return Flags(S.Handle); });
+          if (UseDWARF) {
+            Column("sourceFile", [&](const auto &S) {
+              return SignedID(Location(S.Handle).File);
+            });
+            Column("sourceLine",
+                   [&](const auto &S) { return Location(S.Handle).Line; });
+          }
+        });
+        JSON.attributeObject("refs", [&] {
+          auto Column = [&](const char *Key, auto Value) {
+            JSON.attributeArray(Key, [&] {
+              for (const auto &E : DetailedEdges)
+                JSON.value(Value(E));
+            });
+          };
+          Column("sourceSection",
+                 [](const auto &E) { return E.first.SourceSection; });
+          Column("targetSection",
+                 [](const auto &E) { return E.first.TargetSection; });
+          Column("src",
+                 [&](const auto &E) { return SignedID(E.first.Source); });
+          Column("dst",
+                 [&](const auto &E) { return SignedID(E.first.Target); });
+          Column("count", [](const auto &E) { return E.second.Count; });
+          Column("flags", [](const auto &E) { return E.second.Flags; });
+        });
+      } else {
+        JSON.attributeArray("symbols", [&] {
+          uint32_t ID = 0;
+          for (const DashboardSymbol &S : DashboardSymbols) {
+            JSON.object([&] {
+              JSON.attribute("id", ID++);
+              JSON.attribute("section", S.SectionID);
+              JSON.attribute("chunk", S.ChunkID);
+              JSON.attribute("name", symbolDisplayName(S.Handle));
+              JSON.attribute("linkageName", S.Handle.getName());
+              JSON.attribute("offset", S.Handle.getOffsetInChunk());
+              JSON.attribute("size", S.Handle.getSize());
+              JSON.attribute("flags", Flags(S.Handle));
+              SourceLoc Loc = Location(S.Handle);
+              if (Loc.File != UINT32_MAX) {
+                JSON.attribute("sourceFile", Loc.File);
+                JSON.attribute("sourceLine", Loc.Line);
+              }
+            });
+          }
+        });
+        JSON.attributeArray("refs", [&] {
+          for (const auto &E : DetailedEdges) {
+            JSON.object([&] {
+              JSON.attribute("sourceSection", E.first.SourceSection);
+              JSON.attribute("targetSection", E.first.TargetSection);
+              JSON.attribute("src", SignedID(E.first.Source));
+              JSON.attribute("dst", SignedID(E.first.Target));
+              JSON.attribute("count", E.second.Count);
+              JSON.attribute("flags", E.second.Flags);
+            });
+          }
+        });
+      }
+    });
+  }
+
   void writeDashboardObject(std::ostream &Out) {
     std::vector<std::pair<uint64_t, uint64_t>> SortedEdges;
     SortedEdges.reserve(DashboardEdgeCounts.size());
@@ -1632,6 +1820,7 @@ private:
           });
         }
       });
+      writeSymbolDetails(JSON, false);
       if (CoalesceDirs)
         JSON.attribute("coalesce_dirs", "unary");
     });
@@ -1797,6 +1986,7 @@ private:
             JSON.value(Entry.second);
         });
       });
+      writeSymbolDetails(JSON, true);
       if (CoalesceDirs)
         JSON.attribute("coalesce_dirs", "unary");
     });
@@ -1863,6 +2053,7 @@ private:
   bool ShowGC = false;
   bool CppDemangle = false;
   bool UseDWARF = false;
+  bool SymbolDetails = false;
   bool Gzip = false;
   bool CoalesceDirs = false;
   OutputFormat Format = OutputFormat::Text;
@@ -1889,6 +2080,9 @@ private:
   std::unordered_map<Chunk, ChunkSymbolRange> ChunkSymbolsCache;
   std::vector<SymbolOffset> ChunkSymbolIndex;
   std::unordered_map<Symbol, SourceLoc> SymbolSourceLoc;
+  std::vector<std::string> SourceFiles;
+  std::vector<DashboardSymbol> DashboardSymbols;
+  std::vector<std::pair<SymbolEdgeKey, EdgeInfo>> DetailedEdges;
   std::vector<XRefEdge> Edges;
   std::vector<Symbol> AllSymbols;
   std::unordered_map<Symbol, uint32_t> SymbolIDs;
