@@ -89,12 +89,12 @@ DUMP-DAG: [[DEEP_TOP:[0-9]+]]{{[[:space:]]}}deep_top{{[[:space:]]}}{{.*}}Level1{
 DUMP-DAG: [[DEEP_MID:[0-9]+]]{{[[:space:]]}}deep_mid{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
 DUMP-DAG: [[DEEP_LEAF:[0-9]+]]{{[[:space:]]}}deep_leaf{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
 DUMP-DAG: [[DEEP_CONST:[0-9]+]]{{[[:space:]]}}deep_const_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.rodata
-DUMP-DAG: [[DEEP_RW:[0-9]+]]{{[[:space:]]}}deep_rw_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.data
+DUMP-DAG: [[DEEP_RW:[0-9]+]]{{[[:space:]]}}deep_rw_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}{{[.](data|sdata)}}
 DUMP-DAG: [[DEEP_BSS:[0-9]+]]{{[[:space:]]}}deep_bss_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}{{[.](bss|sdata)}}
 DUMP-DAG: [[WEAK_FN:[0-9]+]]{{[[:space:]]}}weak_function_symbol{{[[:space:]]}}{{.*}}Level1{{/}}Overrides{{/}}override.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
-DUMP-DAG: [[WEAK_DATA:[0-9]+]]{{[[:space:]]}}weak_data_symbol{{[[:space:]]}}{{.*}}Level1{{/}}Overrides{{/}}override.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.data
+DUMP-DAG: [[WEAK_DATA:[0-9]+]]{{[[:space:]]}}weak_data_symbol{{[[:space:]]}}{{.*}}Level1{{/}}Overrides{{/}}override.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}{{[.](data|sdata)}}
 DUMP-DAG: [[WEAK_UNOVERRIDDEN_FN:[0-9]+]]{{[[:space:]]}}weak_unoverridden_function{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.text
-DUMP-DAG: [[WEAK_UNOVERRIDDEN_DATA:[0-9]+]]{{[[:space:]]}}weak_unoverridden_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}.data
+DUMP-DAG: [[WEAK_UNOVERRIDDEN_DATA:[0-9]+]]{{[[:space:]]}}weak_unoverridden_data{{[[:space:]]}}{{.*}}Level1{{/}}Level2{{/}}Level3{{/}}deep.o{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}{{[.](data|sdata)}}
 DUMP: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
 DUMP-DAG: [[MAIN]]{{[[:space:]]}}[[FOO]]{{[[:space:]]}}2{{[[:space:]]}}-
 DUMP-DAG: [[MAIN]]{{[[:space:]]}}[[BAR]]{{[[:space:]]}}1{{[[:space:]]}}-
@@ -103,12 +103,12 @@ DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_MID]]{{[[:space:]]}}1{{[[:space:]]}}
 DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_LEAF]]{{[[:space:]]}}1{{[[:space:]]}}-
 DUMP-DAG: [[DEEP_MID]]{{[[:space:]]}}[[DEEP_LEAF]]{{[[:space:]]}}1{{[[:space:]]}}-
 DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_CONST]]{{[[:space:]]}}2{{[[:space:]]}}-
-DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_RW]]{{[[:space:]]}}2{{[[:space:]]}}-
-DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_BSS]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_RW]]{{[[:space:]]}}{{[12]}}{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[DEEP_BSS]]{{[[:space:]]}}{{[12]}}{{[[:space:]]}}-
 DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_FN]]{{[[:space:]]}}1{{[[:space:]]}}-
-DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_DATA]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_DATA]]{{[[:space:]]}}{{[12]}}{{[[:space:]]}}-
 DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_UNOVERRIDDEN_FN]]{{[[:space:]]}}1{{[[:space:]]}}-
-DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_UNOVERRIDDEN_DATA]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-DAG: [[DEEP_TOP]]{{[[:space:]]}}[[WEAK_UNOVERRIDDEN_DATA]]{{[[:space:]]}}{{[12]}}{{[[:space:]]}}-
 
 DUMP-GC-HIDDEN: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
 DUMP-GC-HIDDEN-DAG: {{[0-9]+}}{{[[:space:]]}}main{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}

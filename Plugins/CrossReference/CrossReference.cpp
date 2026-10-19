@@ -104,6 +104,11 @@
 //                            unavailable. Per-file object-aware readers
 //                            resolve debug relocations and are released after
 //                            each worker.
+//   fragment_details=none|data|all
+//                          -- JSON-only initializer-fragment metadata
+//                            (default: none). "data" records anonymous
+//                            data-like targets referenced by data symbols;
+//                            "all" also records references from functions.
 //   exclude_symbols=<globs> -- comma-delimited list of glob patterns (see
 //                            llvm::GlobPattern); a symbol is omitted from
 //                            the dump, and from any edge it would otherwise
@@ -170,11 +175,13 @@
 #include <cstdlib>
 #include <deque>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -189,6 +196,7 @@ enum class AttributionKind : uint8_t { Exact, NearestPreceding, Unattributed };
 
 enum class OutputFormat : uint8_t { Text, DashboardObject, DashboardColumnar };
 enum class SymbolDetailLevel : uint8_t { None, ELF, DWARF };
+enum class FragmentDetailLevel : uint8_t { None, Data, All };
 
 // A symbol together with its offset and size within the chunk that defines
 // it, used to build a per-chunk, offset-sorted index for referrer lookup.
@@ -214,6 +222,7 @@ struct DashboardSection {
   Section Handle;
   uint32_t PathID = 0;
   std::string Name;
+  std::string InputName;
   uint32_t OutputID = UINT32_MAX;
   uint64_t Size = 0;
   uint8_t Kind = 0;
@@ -503,6 +512,24 @@ public:
         }
         continue;
       }
+      if (Key == "fragment_details") {
+        if (Value == "none") {
+          FragmentDetails = FragmentDetailLevel::None;
+        } else if (Value == "data") {
+          FragmentDetails = FragmentDetailLevel::Data;
+        } else if (Value == "all") {
+          FragmentDetails = FragmentDetailLevel::All;
+        } else {
+          HasError = true;
+          getLinker()->reportDiag(
+              getLinker()->getErrorDiagID(
+                  "CrossReference's fragment_details option must be 'none', "
+                  "'data', or 'all', got '%0'"),
+              Value);
+          return;
+        }
+        continue;
+      }
       if (Key == "exclude_symbols") {
         if (!parseGlobList(Value, ExcludeSymbolPatterns))
           return;
@@ -596,6 +623,15 @@ public:
           "Options string"));
       return;
     }
+    if (FragmentDetails != FragmentDetailLevel::None &&
+        (Format == OutputFormat::Text ||
+         SymbolDetails == SymbolDetailLevel::None)) {
+      HasError = true;
+      getLinker()->reportDiag(getLinker()->getErrorDiagID(
+          "CrossReference's fragment_details option requires JSON output "
+          "and symbol_details=elf or symbol_details=dwarf"));
+      return;
+    }
   }
 
   void ActBeforeWritingOutput() override {
@@ -676,6 +712,17 @@ private:
     EdgeApprox = 1 << 0,
     EdgeUnattributed = 1 << 1,
     EdgeTrampoline = 1 << 2,
+    EdgeTargetApprox = 1 << 3,
+  };
+
+  enum FragmentClass : uint8_t {
+    FragmentNone,
+    FragmentString,
+    FragmentNumeric,
+    FragmentConst,
+    FragmentRelocConst,
+    FragmentRW,
+    FragmentBSS,
   };
 
   struct EdgeInfo {
@@ -705,6 +752,30 @@ private:
   };
   using SymbolEdgeMap =
       std::unordered_map<SymbolEdgeKey, EdgeInfo, SymbolEdgeHash>;
+  struct FragmentKey {
+    uint32_t Container, TargetSection;
+    uint8_t Class;
+    auto fields() const { return std::tie(Container, TargetSection, Class); }
+    bool operator==(const FragmentKey &Other) const {
+      return fields() == Other.fields();
+    }
+    bool operator<(const FragmentKey &Other) const {
+      return fields() < Other.fields();
+    }
+  };
+  struct FragmentHash {
+    size_t operator()(const FragmentKey &K) const {
+      size_t H = K.Container;
+      H ^= K.TargetSection + size_t(0x9e3779b9) + (H << 6) + (H >> 2);
+      return H ^ K.Class;
+    }
+  };
+  struct FragmentRef {
+    FragmentKey Key;
+    uint64_t Count = 0;
+    uint32_t OwnerCount = 0;
+  };
+  using FragmentMap = std::unordered_map<FragmentKey, uint64_t, FragmentHash>;
   struct DashboardSymbol {
     Symbol Handle;
     uint32_t SectionID;
@@ -719,6 +790,7 @@ private:
     std::unordered_map<uint64_t, EdgeInfo> Edges;
     std::unordered_map<uint64_t, uint64_t> DashboardEdgeCounts;
     SymbolEdgeMap SymbolEdges;
+    FragmentMap Fragments;
   };
 
   struct StubWorkResult {
@@ -744,6 +816,10 @@ private:
   }
 
   bool wantDWARF() const { return SymbolDetails == SymbolDetailLevel::DWARF; }
+
+  bool wantFragmentDetails() const {
+    return wantSymbolDetails() && FragmentDetails != FragmentDetailLevel::None;
+  }
 
   // A DWARF request that yields no usable declaration location has the same
   // JSON schema as symbol_details=elf. This keeps consumers from having to
@@ -860,6 +936,29 @@ private:
     return 1; // read-only data
   }
 
+  static uint8_t classifyFragment(std::string_view Name, uint8_t Kind) {
+    auto StartsWith = [&](std::string_view Prefix) {
+      return Name.substr(0, Prefix.size()) == Prefix;
+    };
+    if (StartsWith(".rodata.str") || Name.find(".L.str") != std::string::npos ||
+        StartsWith(".str"))
+      return FragmentString;
+    if (StartsWith(".rodata.cst"))
+      return FragmentNumeric;
+    if (StartsWith(".data.rel.ro"))
+      return FragmentRelocConst;
+    switch (Kind) {
+    case 1:
+      return FragmentConst;
+    case 2:
+      return FragmentRW;
+    case 3:
+      return FragmentBSS;
+    default:
+      return FragmentNone;
+    }
+  }
+
   std::string symbolDisplayName(const Symbol &Sym) const {
     std::string Name = Sym.getName();
     if (CppDemangle)
@@ -894,6 +993,8 @@ private:
       DS.Handle = S;
       DS.PathID = PathID;
       DS.Name = S.getName();
+      if (FragmentDetails != FragmentDetailLevel::None)
+        DS.InputName = DS.Name;
       auto Primary = PrimarySectionSymbols.find(S);
       if (Primary != PrimarySectionSymbols.end())
         DS.Name = symbolDisplayName(Primary->second);
@@ -938,6 +1039,7 @@ private:
 
     DashboardSections.clear();
     DashboardSectionIds.clear();
+    FragmentClasses.clear();
     DashboardPaths.clear();
     DashboardPathIDs.clear();
     DashboardOutputs.clear();
@@ -982,6 +1084,9 @@ private:
       for (DashboardSection &DS : FileSections) {
         uint32_t ID = DashboardSections.size();
         DashboardSectionIds.emplace(DS.Handle, ID);
+        if (FragmentDetails != FragmentDetailLevel::None)
+          FragmentClasses.emplace(DS.Handle,
+                                  classifyFragment(DS.InputName, DS.Kind));
         DashboardSections.push_back(std::move(DS));
       }
     }
@@ -1217,6 +1322,8 @@ private:
   void buildChunkSymbolIndex() {
     ChunkSymbolsCache.clear();
     ChunkSymbolIndex.clear();
+    ChunkFunctionCache.clear();
+    ChunkFunctionIndex.clear();
     // Count and fill a single contiguous allocation. A vector allocation for
     // every one-function chunk costs more than its actual symbol record.
     size_t Count = 0;
@@ -1271,6 +1378,62 @@ private:
         ChunkSymbolIndex[J].MaxEndIndex = Max - Range.Begin;
       }
     });
+
+    // Target attribution needs only function ranges. Keep this second index
+    // compact and build it only for JSON symbol details; text output retains
+    // its historical source-side-only behavior and pays no extra cost.
+    if (!wantSymbolDetails())
+      return;
+    Count = 0;
+    for (Symbol &Sym : AllSymbols) {
+      if (!Sym.isFunction())
+        continue;
+      Chunk C = Sym.getChunk();
+      if (!C)
+        continue;
+      ++ChunkFunctionCache[C].End;
+      ++Count;
+    }
+    Next = 0;
+    for (auto &Entry : ChunkFunctionCache) {
+      uint32_t Length = Entry.second.End;
+      Entry.second = {Next, Next};
+      Next += Length;
+    }
+    ChunkFunctionIndex.resize(Count, {Symbol(nullptr), 0, 0});
+    for (Symbol &Sym : AllSymbols) {
+      if (!Sym.isFunction())
+        continue;
+      Chunk C = Sym.getChunk();
+      if (C)
+        ChunkFunctionIndex[ChunkFunctionCache.find(C)->second.End++] = {
+            Sym, Sym.getOffsetInChunk(), Sym.getSize()};
+    }
+    SortWork.clear();
+    SortWork.reserve(ChunkFunctionCache.size());
+    for (const auto &Entry : ChunkFunctionCache)
+      SortWork.push_back(Entry.second);
+    forEachWorkItem(SortWork.size(), [&](size_t I) {
+      auto Range = SortWork[I];
+      std::sort(ChunkFunctionIndex.begin() + Range.Begin,
+                ChunkFunctionIndex.begin() + Range.End,
+                [](const SymbolOffset &A, const SymbolOffset &B) {
+                  if (A.Offset != B.Offset)
+                    return A.Offset < B.Offset;
+                  if (A.Sym.isLocal() != B.Sym.isLocal())
+                    return A.Sym.isLocal();
+                  return A.Sym.getName() < B.Sym.getName();
+                });
+      uint32_t Max = Range.Begin;
+      for (uint32_t J = Range.Begin; J < Range.End; ++J) {
+        const auto &Current = ChunkFunctionIndex[J];
+        const auto &Previous = ChunkFunctionIndex[Max];
+        if (Current.Offset + static_cast<off_t>(Current.Size) >=
+            Previous.Offset + static_cast<off_t>(Previous.Size))
+          Max = J;
+        ChunkFunctionIndex[J].MaxEndIndex = Max - Range.Begin;
+      }
+    });
   }
 
   // Returns the offset-sorted symbol list for the chunk that defines Sym, as
@@ -1283,6 +1446,31 @@ private:
     return portable::ArrayRef<SymbolOffset>(
         ChunkSymbolIndex.data() + It->second.Begin,
         It->second.End - It->second.Begin);
+  }
+
+  portable::ArrayRef<SymbolOffset> getSortedFunctions(Chunk &C) const {
+    auto It = ChunkFunctionCache.find(C);
+    if (It == ChunkFunctionCache.end())
+      return {};
+    return portable::ArrayRef<SymbolOffset>(ChunkFunctionIndex.data() +
+                                                It->second.Begin,
+                                            It->second.End - It->second.Begin);
+  }
+
+  // Resolve an otherwise section-only code target to a real ELF function in
+  // that exact target chunk. The addend is part of the target address, not a
+  // source relocation offset. Negative and overflowed addends are deliberately
+  // left section-only: guessing across a function boundary would be worse than
+  // reporting no symbol.
+  AttributionKind findTargetFunction(const Use &U, Symbol TargetSym,
+                                     Chunk TargetChunk, Symbol &OutSym) const {
+    off_t SymbolOffset = TargetSym.getOffsetInChunk();
+    off_t Addend = U.getTargetChunkOffset();
+    if (SymbolOffset < 0 || Addend < 0 ||
+        SymbolOffset > std::numeric_limits<off_t>::max() - Addend)
+      return AttributionKind::Unattributed;
+    return findReferrer(getSortedFunctions(TargetChunk), SymbolOffset + Addend,
+                        false, OutSym);
   }
 
   void walkReferencesForInputFile(InputFile &IF, ReferenceWorkResult &Result) {
@@ -1388,11 +1576,38 @@ private:
             return It == SymbolIDs.end() ? UINT32_MAX : It->second;
           };
           uint32_t Source = ID(ReferrerSym);
-          EdgeInfo &Info = Result.SymbolEdges[{SrcIt->second, DstIt->second,
-                                               Source, ID(TargetSym)}];
+          uint32_t Target = ID(TargetSym);
+          if (Target == UINT32_MAX && DstSection.isCode()) {
+            Symbol TargetFunction(nullptr);
+            AttributionKind TargetKind =
+                findTargetFunction(U, TargetSym, TargetChunk, TargetFunction);
+            if (TargetKind != AttributionKind::Unattributed) {
+              Target = ID(TargetFunction);
+              if (Target != UINT32_MAX &&
+                  TargetKind == AttributionKind::NearestPreceding)
+                EdgeFlags |= EdgeTargetApprox;
+            }
+          }
+          EdgeInfo &Info =
+              Result
+                  .SymbolEdges[{SrcIt->second, DstIt->second, Source, Target}];
           ++Info.Count;
           Info.Flags |=
               EdgeFlags | (Source == UINT32_MAX ? EdgeUnattributed : 0);
+
+          // Preserve the raw section graph, but record a separate logical
+          // containment candidate for anonymous data fragments. A missing
+          // target symbol remains missing; the dashboard decides whether a
+          // uniquely owned fragment should be displayed beneath its data
+          // container without double-counting its physical bytes.
+          if (wantFragmentDetails() && Source != UINT32_MAX &&
+              Target == UINT32_MAX &&
+              (FragmentDetails == FragmentDetailLevel::All ||
+               ReferrerSym.isObject())) {
+            auto Class = FragmentClasses.find(DstSection);
+            if (Class != FragmentClasses.end() && Class->second != FragmentNone)
+              ++Result.Fragments[{Source, DstIt->second, Class->second}];
+          }
         }
         if (SrcIt != DashboardSectionIds.end() &&
             DstIt != DashboardSectionIds.end() &&
@@ -1415,6 +1630,7 @@ private:
 
     std::unordered_map<uint64_t, EdgeInfo> EdgeCounts;
     SymbolEdgeMap DetailedCounts;
+    FragmentMap FragmentCounts;
     // Bound transient per-file edge maps; merge in input order for reproducible
     // results regardless of worker scheduling.
     size_t BatchSize = 2 * workerCount(InputFiles.size());
@@ -1437,11 +1653,28 @@ private:
           Info.Count += Entry.second.Count;
           Info.Flags |= Entry.second.Flags;
         }
+        for (const auto &Entry : Result.Fragments)
+          FragmentCounts[Entry.first] += Entry.second;
       }
     }
     DetailedEdges.assign(DetailedCounts.begin(), DetailedCounts.end());
     std::sort(DetailedEdges.begin(), DetailedEdges.end(),
               [](const auto &A, const auto &B) { return A.first < B.first; });
+    FragmentRefs.clear();
+    if (wantFragmentDetails()) {
+      std::unordered_map<uint32_t, uint32_t> OwnerCounts;
+      OwnerCounts.reserve(FragmentCounts.size());
+      for (const auto &Entry : FragmentCounts)
+        ++OwnerCounts[Entry.first.TargetSection];
+      FragmentRefs.reserve(FragmentCounts.size());
+      for (const auto &Entry : FragmentCounts)
+        FragmentRefs.push_back({Entry.first, Entry.second,
+                                OwnerCounts[Entry.first.TargetSection]});
+      std::sort(FragmentRefs.begin(), FragmentRefs.end(),
+                [](const FragmentRef &A, const FragmentRef &B) {
+                  return A.Key < B.Key;
+                });
+    }
     Edges.reserve(EdgeCounts.size());
     for (const auto &Entry : EdgeCounts)
       Edges.push_back(
@@ -1457,6 +1690,9 @@ private:
     ChunkSymbolsCache.clear();
     ChunkSymbolsCache.rehash(0);
     std::vector<SymbolOffset>().swap(ChunkSymbolIndex);
+    ChunkFunctionCache.clear();
+    ChunkFunctionCache.rehash(0);
+    std::vector<SymbolOffset>().swap(ChunkFunctionIndex);
   }
 
   // Collects symbols directly from each input file's own symbol table
@@ -1687,6 +1923,44 @@ private:
 
   // Additive, independently versioned metadata. Section sizes/edges remain
   // unchanged: symbol sizes can overlap (aliases) and must not be summed.
+  void writeInitializerFragments(portable::JSONWriter &JSON, bool Columnar) {
+    if (!wantFragmentDetails())
+      return;
+    JSON.attributeObject("initializerFragments", [&] {
+      JSON.attribute("version", 1);
+      if (Columnar) {
+        JSON.attributeObject("refs", [&] {
+          auto Column = [&](const char *Key, auto Value) {
+            JSON.attributeArray(Key, [&] {
+              for (const FragmentRef &F : FragmentRefs)
+                JSON.value(Value(F));
+            });
+          };
+          Column("container",
+                 [](const FragmentRef &F) { return F.Key.Container; });
+          Column("targetSection",
+                 [](const FragmentRef &F) { return F.Key.TargetSection; });
+          Column("class", [](const FragmentRef &F) { return F.Key.Class; });
+          Column("count", [](const FragmentRef &F) { return F.Count; });
+          Column("ownerCount",
+                 [](const FragmentRef &F) { return F.OwnerCount; });
+        });
+      } else {
+        JSON.attributeArray("refs", [&] {
+          for (const FragmentRef &F : FragmentRefs) {
+            JSON.object([&] {
+              JSON.attribute("container", F.Key.Container);
+              JSON.attribute("targetSection", F.Key.TargetSection);
+              JSON.attribute("class", F.Key.Class);
+              JSON.attribute("count", F.Count);
+              JSON.attribute("ownerCount", F.OwnerCount);
+            });
+          }
+        });
+      }
+    });
+  }
+
   void writeSymbolDetails(portable::JSONWriter &JSON, bool Columnar) {
     if (!wantSymbolDetails())
       return;
@@ -1789,6 +2063,7 @@ private:
           }
         });
       }
+      writeInitializerFragments(JSON, Columnar);
     });
   }
 
@@ -2062,6 +2337,7 @@ private:
   bool ShowGC = false;
   bool CppDemangle = false;
   SymbolDetailLevel SymbolDetails = SymbolDetailLevel::None;
+  FragmentDetailLevel FragmentDetails = FragmentDetailLevel::None;
   bool Gzip = false;
   bool CoalesceDirs = false;
   OutputFormat Format = OutputFormat::Text;
@@ -2087,10 +2363,13 @@ private:
   std::unordered_set<Chunk> StubChunks;
   std::unordered_map<Chunk, ChunkSymbolRange> ChunkSymbolsCache;
   std::vector<SymbolOffset> ChunkSymbolIndex;
+  std::unordered_map<Chunk, ChunkSymbolRange> ChunkFunctionCache;
+  std::vector<SymbolOffset> ChunkFunctionIndex;
   std::unordered_map<Symbol, SourceLoc> SymbolSourceLoc;
   std::vector<std::string> SourceFiles;
   std::vector<DashboardSymbol> DashboardSymbols;
   std::vector<std::pair<SymbolEdgeKey, EdgeInfo>> DetailedEdges;
+  std::vector<FragmentRef> FragmentRefs;
   std::vector<XRefEdge> Edges;
   std::vector<Symbol> AllSymbols;
   std::unordered_map<Symbol, uint32_t> SymbolIDs;
@@ -2101,6 +2380,7 @@ private:
   std::unordered_map<std::string, uint32_t> DashboardOutputIDs;
   DashboardPathCoalescer DashboardPathCompressor;
   std::unordered_map<Section, Symbol> PrimarySectionSymbols;
+  std::unordered_map<Section, uint8_t> FragmentClasses;
   std::unordered_map<Section, uint32_t> DashboardSectionIds;
   std::unordered_map<uint64_t, uint64_t> DashboardEdgeCounts;
 };

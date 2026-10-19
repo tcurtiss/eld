@@ -136,6 +136,7 @@ The supported options are:
 | `show_gc=yes\|no` | `no` | Includes garbage-collected symbols and edges in text output. |
 | `cpp_demangle=yes\|no` | `no` | Demangles C++ names in output and name-pattern matching. |
 | `symbol_details=none\|elf\|dwarf` | `none` | `elf` adds symbol records and attributed reference pairs to JSON. `dwarf` additionally looks up function and variable declaration locations in DWARF, and adds source locations to JSON and text. Text always emits its compact symbol catalog and edge table. |
+| `fragment_details=none\|data\|all` | `none` | JSON-only logical initializer-fragment metadata. `data` records anonymous data-like targets referenced by data symbols; `all` also records known function containers. Requires `symbol_details=elf` or `dwarf`. |
 | `exclude_symbols=<globs>` | unset | Comma-delimited name patterns. Matching symbols and their edges are omitted. |
 | `exclude_files=<globs>` | unset | Comma-delimited patterns matched against resolved object-file paths. |
 | `include_symbols=<globs>` | unset | If present, only symbols matching at least one pattern are retained. |
@@ -456,7 +457,7 @@ Both JSON formats use the following fields:
 | `refs.sourceSection`, `targetSection` | Section IDs, retained even when an endpoint symbol is unavailable. |
 | `refs.src`, `dst` | Symbol IDs, or -1 when unavailable. |
 | `refs.count` | Aggregated static relocation count for this section/symbol pair. |
-| `refs.flags` | Bit mask: 1 nearest-symbol approximation, 2 unattributed source, 4 trampoline. Tags are unioned when aggregating. |
+| `refs.flags` | Bit mask: 1 nearest source-symbol approximation, 2 unattributed source, 4 trampoline, 8 nearest target-function approximation. Tags are unioned when aggregating. |
 
 In `format=json`, `symbols` and `refs` are arrays of objects with these fields.
 Missing source locations omit `sourceFile` and `sourceLine`. In
@@ -466,8 +467,29 @@ gives the number of symbols. Source columns are present only when
 locations use `sourceFile=-1`, `sourceLine=0`.
 
 Detailed references include same-section and self-symbol pairs, unlike the
-section graph. Symbol records include locals and GC'd sections independently of
-text filtering options. Aliases can share ranges: **never sum symbol sizes to
-calculate footprint**. Continue using section sizes, and treat symbol details as
-inspection metadata. Neither IDs nor the chosen alias for range attribution are
-persistent identities across builds.
+section graph. For a relocation that names a code section instead of a function,
+the plugin combines its target symbol offset and relocation addend, then searches
+only that target chunk's ELF function ranges. A containing range fills `dst`
+exactly; a preceding function is retained only with flag 8. Negative, overflowed,
+or otherwise unresolvable target offsets remain `dst=-1`. This is ELF-only
+attribution: DWARF declaration locations enrich the resolved function under
+`symbol_details=dwarf`, but ambiguous DWARF PCs never fabricate a target symbol.
+Symbol records include locals and GC'd sections independently of text filtering
+options. Aliases can share ranges: **never sum symbol sizes to calculate
+footprint**. Continue using section sizes, and treat symbol details as inspection
+metadata. Neither IDs nor the chosen alias for range attribution are persistent
+identities across builds.
+
+### Optional initializer fragments
+
+`fragment_details=data` adds `initializerFragments` inside `symbolDetails`.
+It records anonymous data-like target sections referenced by known data symbols
+without changing the section graph or pretending that a target has an ELF
+symbol. `fragment_details=all` additionally records references from known
+function symbols. Both JSON formats use a version-1 `refs` table with
+`container` (symbol ID), `targetSection` (section ID), `class`, relocation
+`count`, and `ownerCount`. Classes are 1 string literal, 2 numeric constant, 3
+const data, 4 relocatable const data, 5 read/write data, and 6 zero-init data.
+A target with `ownerCount > 1` is shared; consumers must retain its physical
+bytes only once. This option requires JSON output and
+`symbol_details=elf` or `symbol_details=dwarf`.
