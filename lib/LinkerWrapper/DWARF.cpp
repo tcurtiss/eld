@@ -37,11 +37,20 @@ plugin::DWARFInfo::DWARFInfo(plugin::InputFile F) {
 
   m_ObjectFile = ObjectFileOrError->release();
 
-  std::unique_ptr<llvm::DWARFContext> Context =
-      llvm::DWARFContext::create(*m_ObjectFile);
+  // Debug information is optional linker input. In particular, a malformed
+  // debug section must not make an optional plugin enrichment abort the link
+  // through LLVM's unchecked-Error path. Retain the context when LLVM can
+  // construct one, but discard recoverable DWARF diagnostics for this
+  // best-effort reader.
+  auto IgnoreDWARFError = [](llvm::Error Error) {
+    llvm::consumeError(std::move(Error));
+  };
+  std::unique_ptr<llvm::DWARFContext> Context = llvm::DWARFContext::create(
+      *m_ObjectFile, llvm::DWARFContext::ProcessDebugRelocations::Process,
+      nullptr, "", IgnoreDWARFError, IgnoreDWARFError);
 
   m_DWARFContext = Context.release();
-  ShouldDeleteDWARFContext = true;
+  ShouldDeleteDWARFContext = m_DWARFContext != nullptr;
 }
 
 plugin::DWARFInfo::~DWARFInfo() {
@@ -52,6 +61,8 @@ plugin::DWARFInfo::~DWARFInfo() {
 
 std::vector<plugin::DWARFUnit> plugin::DWARFInfo::getDWARFUnits() const {
   std::vector<plugin::DWARFUnit> DUs;
+  if (!m_DWARFContext)
+    return DUs;
   for (auto &DU : m_DWARFContext->compile_units())
     DUs.push_back(plugin::DWARFUnit(DU.get()));
   return DUs;
@@ -274,13 +285,11 @@ bool getSize(llvm::DWARFDie &Die, uint64_t &Size, uint32_t PointerSize) {
     Size = ArrayCount * BaseTypeSize;
     return true;
   }
-  default: {
-    std::string Msg =
-        (llvm::Twine("found unknown type ") + TagString(Die.getTag()) +
-         " @Offset 0x" + llvm::utohexstr(Die.getOffset(), true))
-            .str();
-    llvm_unreachable(Msg.c_str());
-  }
+  default:
+    // A plugin's DWARF enrichment is best effort. Newer DWARF versions and
+    // producer extensions can introduce a type tag this wrapper does not yet
+    // model, so leave its size unavailable instead of aborting the link.
+    return false;
   }
 }
 

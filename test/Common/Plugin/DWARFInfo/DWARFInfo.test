@@ -7,7 +7,17 @@ RUN: %clang -c -g %p/Inputs/1.c -o %t.o
 RUN: %clang -c %p/Inputs/1.c -o %t2.o
 RUN: %link %t.o -T %p/Inputs/script.t -o %t.out 2>&1 | %filecheck %s --check-prefix=WITHDEBUG
 RUN: %link %t2.o -T %p/Inputs/script.t -o %t.out 2>&1 | %filecheck %s --check-prefix=WITHOUTDEBUG
+# Corrupt optional DWARF metadata without changing the linkable program.
+# Both DWARF reader paths exercised by the plugin must tolerate it.
+RUN: %objcopy --remove-section=.rel.debug_info --remove-section=.rela.debug_info --remove-section=.debug_abbrev %t.o %t3.o
+RUN: %link %t3.o -T %p/Inputs/script.t -o %t3.out 2>&1 | %filecheck %s --check-prefix=CORRUPT --allow-empty
+# Keep the DIE stream intact but remove its DWARF string backing. Every DIE
+# name lookup must consume the resulting getAsCString() error.
+RUN: %objcopy --remove-section=.rel.debug_str --remove-section=.rela.debug_str --remove-section=.rel.debug_str_offsets --remove-section=.rela.debug_str_offsets --remove-section=.debug_str %t.o %t4.o
+RUN: %link %t4.o -T %p/Inputs/script.t -o %t4.out 2>&1 | %filecheck %s --check-prefix=BADSTRING --allow-empty
 WITHDEBUG-DAG: good
 WITHDEBUG-NOT: bad
 WITHOUTDEBUG: bad
+CORRUPT-NOT: fatalUncheckedError
+BADSTRING-NOT: fatalUncheckedError
 #END_TEST

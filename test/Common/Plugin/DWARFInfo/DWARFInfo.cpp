@@ -1,5 +1,6 @@
 #include "OutputSectionIteratorPlugin.h"
 #include "PluginVersion.h"
+#include <cstdint>
 #include <iostream>
 
 using namespace eld::plugin;
@@ -14,10 +15,34 @@ public:
     for (InputFile &F : getLinker()->getInputFiles()) {
       if (!F.getSize())
         continue;
+
+      // Exercise the object-aware DWARF reader used by plugins that inspect
+      // input files directly. Parsing malformed optional metadata must not
+      // abort the link.
+      DWARFInfo DirectDI(F);
+      for (DWARFUnit &Unit : DirectDI.getDWARFUnits())
+        for (DWARFDie &Die : Unit.getDIEs()) {
+          (void)Die.getName();
+          if (Die.isType()) {
+            uint64_t Size;
+            (void)Die.getSize(Size, 8);
+          }
+        }
+
       eld::Expected<DWARFInfo> expDI =
           getLinker()->getDWARFInfoForInputFile(F, true);
       DWARFInfo DI = (expDI ? expDI.value() : DWARFInfo(nullptr));
       if (DI.hasDWARFContext()) {
+        // Exercise string decoding for every DIE. A malformed or unresolved
+        // DW_AT_name is optional debug metadata and must not abort the link.
+        for (DWARFUnit &Unit : DI.getDWARFUnits())
+          for (DWARFDie &Die : Unit.getDIEs()) {
+            (void)Die.getName();
+            if (Die.isType()) {
+              uint64_t Size;
+              (void)Die.getSize(Size, 8);
+            }
+          }
         std::cout << "good\n";
       } else {
         std::cout << "bad\n";

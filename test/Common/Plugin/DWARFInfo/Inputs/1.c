@@ -1,1 +1,3 @@
-int foo() {return 0;}
+_Atomic(int) atomic_counter;
+
+int foo() { return atomic_counter; }
