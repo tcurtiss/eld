@@ -7,6 +7,8 @@ RUN: %clang %clangopts -g -O0 -c %p/Inputs/b.c -o %t/b.o
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/plain.yaml
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/none.yaml
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/detail.yaml
+RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/fragments.yaml
+RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/fragments_object.yaml
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/filtered.yaml
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/columnar.yaml
@@ -31,6 +33,8 @@ RUN: %link %linkopts --gc-sections %t/a.o %t/b.o -e entry -o %t/out --plugin-con
 RUN: %python %p/check.py gc %t
 RUN: %not %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/invalid.yaml 2>&1 | %filecheck %s
 # CHECK: symbol_details option must be 'none', 'elf', or 'dwarf'
+RUN: %not %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/invalid_fragment.yaml 2>&1 | %filecheck %s --check-prefix=FRAGMENT
+# FRAGMENT: fragment_details option requires JSON output and symbol_details=elf or symbol_details=dwarf
 RUN: %clangxx %clangopts -O0 -fno-exceptions -fno-rtti -c %p/Inputs/a.cpp -o %t/a.o
 RUN: %clang %clangopts -O0 -c %p/Inputs/b.c -o %t/b.o
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml

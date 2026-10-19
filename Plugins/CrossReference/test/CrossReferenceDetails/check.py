@@ -30,13 +30,16 @@ if mode == 'configs':
     base.mkdir(exist_ok=True)
     modes = {'plain': 'format=json', 'none': 'format=json:symbol_details=none',
              'detail': 'format=json:symbol_details=elf',
+             'fragments': 'format=json_columnar:symbol_details=elf:fragment_details=data',
+             'fragments_object': 'format=json:symbol_details=elf:fragment_details=data',
              'dwarf': 'format=json:symbol_details=dwarf:source_root=/',
              'columnar': 'format=json_columnar:symbol_details=dwarf:source_root=/',
              'gzip': 'format=json_columnar:symbol_details=dwarf:source_root=/:gzip=yes',
              'strip': 'format=json:symbol_details=dwarf:strip_prefix=*/CrossReferenceDetails/',
              'demangled': 'format=json_columnar:symbol_details=dwarf:source_root=/:cpp_demangle=yes',
              'filtered': 'format=json:symbol_details=elf:exclude_local=yes:exclude_data=yes:min_refs=99999',
-             'invalid': 'format=json:symbol_details=maybe'}
+             'invalid': 'format=json:symbol_details=maybe',
+             'invalid_fragment': 'format=text:fragment_details=data'}
     for name, opts in modes.items():
         text = ('GlobalPlugins:\n  - Type: LinkerPlugin\n    Name: CrossReference\n'
                 '    Library: CrossReference\n    Options: ')
@@ -48,6 +51,20 @@ elif mode == 'check':
     detail, rich = load(base / 'detail.json')
     assert no is None and explicit_no is None and plain == explicit_none
     assert plain['nodes'] == detail['nodes'] and plain['edges'] == detail['edges']
+    with open(base / 'fragments.json') as f:
+        fragments = json.load(f)['symbolDetails']['initializerFragments']['refs']
+    assert fragments['container']
+    assert len(fragments['container']) == len(fragments['targetSection'])
+    assert all(c in range(1, 7) for c in fragments['class'])
+    assert all(c > 0 for c in fragments['count'])
+    assert all(c > 0 for c in fragments['ownerCount'])
+    assert any(c == 1 for c in fragments['ownerCount'])
+    assert any(c > 1 for c in fragments['ownerCount'])
+    with open(base / 'fragments_object.json') as f:
+        object_fragments = json.load(f)['symbolDetails']['initializerFragments']['refs']
+    assert len(object_fragments) == len(fragments['container'])
+    assert all(r['class'] in range(1, 7) and r['count'] > 0
+               and r['ownerCount'] > 0 for r in object_fragments)
     assert rich == load(base / 'filtered.json')[1]
     dwarf = load(base / 'dwarf.json')[1]
     assert dwarf == load(base / 'columnar.json')[1] == load(base / 'gzip.json.gz')[1]
@@ -63,6 +80,17 @@ elif mode == 'check':
     assert stripped_details['refs'] == dwarf['refs']
     assert all(n['path'].startswith('Output/') for n in stripped['nodes'])
     names = {s['linkageName']: s for s in dwarf['symbols']}
+    elf_names = {s['linkageName']: s for s in rich['symbols']}
+    assert any(e['src'] == elf_names['code_section_ref']['id'] and
+               e['dst'] == elf_names['asm_target']['id']
+               for e in rich['refs'])
+    assert any(e['src'] == elf_names['code_section_nearest']['id'] and
+               e['dst'] == elf_names['asm_target']['id'] and e['flags'] & 8
+               for e in rich['refs'])
+    assert any(e['src'] == names['code_section_dwarf']['id'] and
+               e['dst'] == names['_ZN4demo8overloadEi']['id'] and
+               dwarf['symbols'][e['dst']]['sourceLine'] == 4
+               for e in dwarf['refs'])
     assert names['entry']['section'] == names['alias_entry']['section']
     assert names['entry']['offset'] == names['alias_entry']['offset']
     assert names['weak_data']['flags'] & 2
@@ -71,7 +99,7 @@ elif mode == 'check':
     assert len(local) >= 2 and all(s['flags'] & 1 for s in local)
     for name, line in [('entry', 10), ('_ZN4demo8overloadEi', 4),
                        ('_ZN4demo8overloadEj', 5), ('_ZN4demo4dataE', 3),
-                       ('_ZN4demo8callbackE', 7), ('remote', 2), ('external_data', 1), ('data', 14)]:
+                       ('_ZN4demo8callbackE', 7), ('remote', 4), ('external_data', 1), ('data', 14)]:
         sym = names[name]
         assert sym['sourceLine'] == line, (name, sym)
         source = dwarf['sourceFiles'][sym['sourceFile']]
@@ -80,7 +108,7 @@ elif mode == 'check':
     assert all(s['sourceFile'] == -1 for s in rich['symbols'])
     assert any(e['sourceSection'] == e['targetSection'] for e in rich['refs'])
     for e in rich['refs']:
-        assert e['count'] > 0 and 0 <= e['flags'] < 8
+        assert e['count'] > 0 and 0 <= e['flags'] < 16
         for key, section in [('src', 'sourceSection'), ('dst', 'targetSection')]:
             if e[key] != -1:
                 assert rich['symbols'][e[key]]['section'] == e[section]

@@ -1,4 +1,6 @@
 int external_data = 4;
+const char *fragment_text = "fragment text";
+const char *fragment_text_alias = "fragment text";
 int remote(int x) { return x + external_data; }
 __attribute__((weak)) int weak_data = 3;
 __attribute__((weak)) int weak_function(void) { return weak_data; }
