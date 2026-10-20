@@ -1745,7 +1745,10 @@ private:
                                        : SymbolIDs.find(Sym) == SymbolIDs.end())
         continue;
       InputFile IF = Sym.getInputFile();
-      if (!IF)
+      // Linker-created symbols can belong to an internal "Plugin" input.
+      // It has no object-file bytes or DWARF, so do not schedule an
+      // object-aware reader for it (or for any other non-object input).
+      if (!IF || IF.isInternal() || !IF.isObjectFile())
         continue;
       auto It = InputFileIDs.emplace(IF, InputFiles.size());
       if (It.second) {
