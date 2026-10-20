@@ -43,9 +43,15 @@ lit, or a target compiler.
 All discovered plugins build by default. Select a subset with
 `-DELD_PLUGINS=HelloWorldPlugin`; quote semicolon-separated lists when
 selecting multiple plugins. This lets CI select plugins compatible with an
-older ELD package. A plugin that calls
-`eld_standalone_require_api(plugin header symbol)` reports a missing public
-API during configuration; use `ELD_PLUGINS` to omit it from that package build.
+older ELD package. A plugin can call
+`eld_standalone_require_api(plugin header symbol_regex)` to reject a package
+that lacks a required public API during configuration. `plugin` is the target
+name printed in the diagnostic, `header` is relative to the installed
+`ELD_INCLUDE_DIR` (for example `LinkerWrapper.h`), and `symbol_regex` is a
+CMake regular expression searched in that header. Escape regular-expression
+metacharacters when matching a literal spelling. The helper checks API
+availability early; compilation remains responsible for validating signatures.
+Use `ELD_PLUGINS` to omit an incompatible plugin from that package build.
 
 ### Package C++ runtime libraries (Linux)
 
@@ -198,8 +204,12 @@ Give the plugin directory and CMake target the same name. Use
 `eld_add_standalone_plugin(... SOURCES ... LIBRARIES ...)` when
 ELD_STANDALONE is true and the normal ELD/LLVM library helpers otherwise.
 The standalone helper links ELD::LW; optional dependencies belong to the
-plugin that needs them. `eld_standalone_require_api(plugin header symbol)`
-can reject packages missing a required public API.
+plugin that needs them. Use
+`eld_standalone_require_api(plugin header symbol_regex)` before adding a
+plugin that needs a newer public API: `plugin` names the diagnostic target,
+`header` is relative to `ELD_INCLUDE_DIR`, and `symbol_regex` is a CMake regex
+matched against that header. It provides an early availability diagnostic;
+normal compilation still checks declaration signatures.
 
 Keep regression tests under the plugin's test directory. Register them with
 `eld_register_plugin_tests(test_dir target)` in integrated builds, and with

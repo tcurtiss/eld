@@ -67,16 +67,25 @@ if(ELD_FOUND)
   endif()
 endif()
 
-# Plugins may require a public API that is newer than the installed package.
-function(eld_standalone_require_api plugin header symbol)
+# Verify that an installed ELD package declares a public PluginAPI symbol.
+#
+#   eld_standalone_require_api(<plugin> <header> <symbol_regex>)
+#
+# <plugin> is the plugin target or another descriptive name used in a
+# configuration error. <header> is the PluginAPI header path relative to
+# ELD_INCLUDE_DIR, for example LinkerWrapper.h. <symbol_regex> is a CMake
+# regular expression searched in that header; escape regex metacharacters when
+# matching a literal spelling. This is an early availability check only: the
+# plugin's normal compilation still validates the declaration's type and use.
+function(eld_standalone_require_api plugin header symbol_regex)
   set(_header "${ELD_INCLUDE_DIR}/${header}")
   if(NOT EXISTS "${_header}")
     message(FATAL_ERROR "${plugin} requires ELD API header ${_header}")
   endif()
   file(READ "${_header}" _contents)
-  if(NOT _contents MATCHES "${symbol}")
+  if(NOT _contents MATCHES "${symbol_regex}")
     message(FATAL_ERROR
-      "${plugin} requires ELD API '${symbol}' in '${header}', but the "
+      "${plugin} requires ELD API matching '${symbol_regex}' in '${header}', but the "
       "installed ELD package does not provide it")
   endif()
 endfunction()
