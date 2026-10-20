@@ -27,23 +27,9 @@ if(ELD_INCLUDE_DIR)
     endif()
   endforeach()
 
-  # Accept installations that ship only the versioned shared library.
-  set(_eld_library_names LW)
-  if(EXISTS "${ELD_INCLUDE_DIR}/PluginBase.h")
-    file(STRINGS "${ELD_INCLUDE_DIR}/PluginBase.h" _eld_api_major
-      REGEX "^#define LINKER_PLUGIN_API_MAJOR_VERSION [0-9]+")
-    if(_eld_api_major MATCHES "VERSION ([0-9]+)")
-      set(ELD_PLUGIN_API_MAJOR_VERSION "${CMAKE_MATCH_1}")
-      if(APPLE)
-        list(APPEND _eld_library_names
-          "libLW.${ELD_PLUGIN_API_MAJOR_VERSION}.dylib")
-      elseif(UNIX)
-        list(APPEND _eld_library_names
-          "libLW.so.${ELD_PLUGIN_API_MAJOR_VERSION}")
-      endif()
-    endif()
-  endif()
-  find_library(ELD_LIBRARY NAMES ${_eld_library_names}
+  # Find the normal linker name. The host linker records the selected
+  # library's SONAME, so the build does not need to infer it from the API.
+  find_library(ELD_LIBRARY NAMES LW
     PATHS "${ELD_TOOLS_DIR}/lib" "${ELD_TOOLS_DIR}/lib64"
     NO_DEFAULT_PATH)
   if(WIN32)
