@@ -24,8 +24,8 @@ plugin::DWARFInfo::DWARFInfo(llvm::DWARFContext *DC) { m_DWARFContext = DC; }
 
 // FIXME: Remove
 plugin::DWARFInfo::DWARFInfo(plugin::InputFile F) {
-  llvm::MemoryBufferRef Buffer(F.getInputFile()->getContents(),
-                               F.getFileName());
+  std::string FileName = F.getFileName();
+  llvm::MemoryBufferRef Buffer(F.getInputFile()->getContents(), FileName);
 
   llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> ObjectFileOrError =
       llvm::object::ObjectFile::createObjectFile(Buffer);
@@ -35,7 +35,7 @@ plugin::DWARFInfo::DWARFInfo(plugin::InputFile F) {
     // the consuming logger so malformed optional plugin input cannot abort
     // the link when the temporary Error is destroyed.
     llvm::logAllUnhandledErrors(ObjectFileOrError.takeError(), llvm::errs(),
-                                "ELD plugin DWARF: ");
+                                "ELD plugin DWARF (" + FileName + "): ");
     return;
   }
 
