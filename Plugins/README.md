@@ -42,7 +42,10 @@ lit, or a target compiler.
 
 All discovered plugins build by default. Select a subset with
 `-DELD_PLUGINS=HelloWorldPlugin`; quote semicolon-separated lists when
-selecting multiple plugins.
+selecting multiple plugins. This lets CI select plugins compatible with an
+older ELD package. A plugin that calls
+`eld_standalone_require_api(plugin header symbol)` reports a missing public
+API during configuration; use `ELD_PLUGINS` to omit it from that package build.
 
 ### Package C++ runtime libraries (Linux)
 
@@ -107,11 +110,12 @@ Linux standalone testing is enabled.
 
 ## Host platforms
 
-Library discovery uses the platform's library suffixes and the installed
-API version, rather than a fixed Linux soname. On Windows the installation
-must provide both the LinkerWrapper DLL and its import library. ELD_LIBRARY
-and ELD_RUNTIME_LIBRARY can override their locations. Standalone plugins do
-not record library search paths; set up the runtime environment before loading.
+Library discovery uses the platform's normal library suffixes to find `LW`.
+The host linker records the SONAME of the selected library. On Windows the
+installation must provide both the LinkerWrapper DLL and its import library.
+ELD_LIBRARY and ELD_RUNTIME_LIBRARY can override their locations. Standalone
+plugins do not record library search paths; set up the runtime environment
+before loading.
 
 The standalone workflow is validated on Linux. Windows and macOS execution
 still require native validation with compatible ELD packages. Compiler,
