@@ -31,7 +31,11 @@ plugin::DWARFInfo::DWARFInfo(plugin::InputFile F) {
       llvm::object::ObjectFile::createObjectFile(Buffer);
 
   if (!ObjectFileOrError) {
-    llvm::errs() << ObjectFileOrError.takeError() << "\n";
+    // Printing llvm::Error with raw_ostream does not mark it checked. Use
+    // the consuming logger so malformed optional plugin input cannot abort
+    // the link when the temporary Error is destroyed.
+    llvm::logAllUnhandledErrors(ObjectFileOrError.takeError(), llvm::errs(),
+                                "ELD plugin DWARF: ");
     return;
   }
 
