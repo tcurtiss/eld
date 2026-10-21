@@ -8,6 +8,7 @@
 #include "DWARF.h"
 #include "PluginADT.h"
 #include "PluginBase.h"
+#include "eld/Diagnostics/DiagnosticEngine.h"
 #include "eld/Diagnostics/MsgHandler.h"
 #include "eld/Input/InputFile.h"
 #include "llvm/BinaryFormat/Dwarf.h"
@@ -31,11 +32,11 @@ plugin::DWARFInfo::DWARFInfo(plugin::InputFile F) {
       llvm::object::ObjectFile::createObjectFile(Buffer);
 
   if (!ObjectFileOrError) {
-    // Printing llvm::Error with raw_ostream does not mark it checked. Use
-    // the consuming logger so malformed optional plugin input cannot abort
-    // the link when the temporary Error is destroyed.
-    llvm::logAllUnhandledErrors(ObjectFileOrError.takeError(), llvm::errs(),
-                                "ELD plugin DWARF (" + FileName + "): ");
+    // DWARF is optional plugin enrichment. Report malformed input through
+    // ELD's diagnostics, then let the caller fall back without a context.
+    F.getInputFile()->getDiagEngine()->raise(
+        Diag::warn_dwarf_object_unavailable)
+        << FileName << llvm::toString(ObjectFileOrError.takeError());
     return;
   }
 
