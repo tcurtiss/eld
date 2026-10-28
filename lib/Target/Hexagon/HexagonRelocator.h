@@ -32,6 +32,8 @@ public:
 
   Result applyRelocation(Relocation &pRelocation) override;
 
+  bool prepareRelocations(ELFSection &Section) override;
+
   /// scanRelocation - determine the empty entries are needed or not and create
   /// the empty entries if needed.
   /// For Hexagon, following entries are check to create:

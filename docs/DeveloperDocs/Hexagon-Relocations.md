@@ -58,6 +58,29 @@ Relocations with the `_X` suffix are the upper-bits half of such a pair. The low
 
 ## PC-Relative Branch Relocations
 
+### Absolute address materialization
+
+After `AfterLayout` plugins run, ELD can replace the two-word sequence
+`immext; Rd = add(pc, ...)` with `immext; Rd = ...` when its relocation pair
+references the same defined, non-preemptible absolute symbol. This includes
+symbols made absolute by `LinkerWrapper::setSymbolAddress`. The conversion
+changes `R_HEX_B32_PCREL_X` / `R_HEX_6_PCREL_X` to `R_HEX_32_6_X` /
+`R_HEX_16_X`, removing each relocation site's packet offset from its addend.
+It preserves genuine symbol offsets, register selection, packet markers and
+code size. The final value is `S + A`, independent of the shared object's load
+bias. Preparation happens before both relocation application and copying any
+`--emit-relocs` records.
+
+Only the recognized address-materialization pair is converted: extended
+branches, ordinary section-relative addresses, preemptible symbols, GOT-based
+addressing and dynamic pointer relocations retain their existing handling.
+Candidate pairs with missing/conflicting relocations, inconsistent addends or
+invalid instruction packets are diagnosed. To preserve references to local
+symbols when compiling, use `-Wa,--reloc-section-sym=none`; the rewrite does
+not infer a data symbol from a relocation to its enclosing section.
+
+### PC-relative calculation
+
 Expression: `S + A - P`
 
 ### Non-Extended

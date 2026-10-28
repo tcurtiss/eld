@@ -586,6 +586,13 @@ public:
   /// converged, and before the symbol table and relocations are finalized
   /// and emitted.
   ///
+  /// \note Relocations must reference S itself to observe the new value;
+  /// references to its original section symbol plus an offset are not
+  /// retargeted. On Hexagon, a supported immediate-extender/add(pc) pair
+  /// referencing a non-preemptible absolute symbol is rewritten in place to
+  /// an absolute immediate assignment. This does not provide general rewriting
+  /// of GOT references, dynamic pointer relocations, or arbitrary instructions.
+  ///
   /// \note Reassigning a symbol's address this way does not change the
   /// address range that the linker's virtual-address overlap check
   /// associates with the symbol's original output section. If the new
