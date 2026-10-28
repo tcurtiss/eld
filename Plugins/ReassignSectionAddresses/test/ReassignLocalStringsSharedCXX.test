@@ -1,0 +1,3 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# Both -fpic and -fPIC, with C++ local statics, templates, lambdas and inlining.
+RUN: %python %p/Inputs/check_address_patterns.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --mode shared --link %link --readelf %readelf --objdump %objdump --work %t.dir

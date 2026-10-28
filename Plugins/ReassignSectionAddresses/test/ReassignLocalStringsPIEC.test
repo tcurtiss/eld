@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# True PIE executables: compile with -fpie/-fPIE, link with --pie, and check
+# ET_DYN, DF_1_PIE and the entry point as well as every local-string operand.
+RUN: %python %p/Inputs/check_address_patterns.py --compiler %clang --compiler-flags="%clangopts" --language c --mode pie --link %link --readelf %readelf --objdump %objdump --work %t.dir

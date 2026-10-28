@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# Full and Thin LTO must preserve exact string symbols during link-time codegen.
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clang --compiler-flags="%clangopts" --language c --case lto --link %link --readelf %readelf --objdump %objdump --work %t.c.dir
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --case lto --link %link --readelf %readelf --objdump %objdump --work %t.cxx.dir

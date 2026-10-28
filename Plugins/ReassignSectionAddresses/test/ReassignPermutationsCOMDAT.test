@@ -1,0 +1,3 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# One selected external inline definition and its hidden weak local static.
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --case comdat --link %link --readelf %readelf --objdump %objdump --work %t.cxx.dir

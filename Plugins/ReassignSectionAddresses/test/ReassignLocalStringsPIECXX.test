@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# C++ PIEs with -fpie and -fPIE, retaining the full optimization/hash/layout
+# matrix, packet-preserving immediate checks and serial/parallel comparison.
+RUN: %python %p/Inputs/check_address_patterns.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --mode pie --link %link --readelf %readelf --objdump %objdump --work %t.dir

@@ -9,6 +9,34 @@ The plugin runs after layout, when output sections and symbol contents are
 known. It must not be used for relaxable code that expects the symbols to keep
 their pre-assignment addresses.
 
+## References to assigned IDs on Hexagon
+
+When code passes a string's assigned address as an ID, compile its translation
+unit with `-Wa,--reloc-section-sym=none`. This preserves relocation references
+to the actual local string symbols instead of substituting section symbols
+plus offsets. For example, a function-local `static const char fmt[]` in
+`.dedup` can be used in either C or C++ without an assembly macro. Its bytes
+must not be dereferenced at the assigned address.
+
+For shared-library code, retain `-fpic` or `-fPIC`. PIE executables can use
+`-fpie` or `-fPIE` and link with `--pie`. ELD recognizes the immediate-extender
+plus `Rd = add(pc, ...)` sequence referencing a non-preemptible symbol made
+absolute by the plugin and rewrites it to `Rd = ##assigned_value`. The two-word
+sequence remains eight bytes, with no additional GOT entry, runtime relocation,
+or memory load. Genuine symbol offsets are preserved. This prevents the
+library's load bias from being added to the ID. No additional plugin option is
+needed; the same rewrite also works in fixed-address executables.
+
+This requires an ELD build containing the Hexagon absolute-address rewrite;
+the presence of `setSymbolAddress` alone in an older package is not sufficient.
+The Hexagon lit tests check actual C/C++ instructions and retained
+relocations, including parallel and serial linking. The rewrite is deliberately
+narrow: it does not recover symbols from section-relative references in old
+archives, rewrite GOT-based addressing, fix dynamic pointer-table relocations,
+or change preemptible symbol references. Malformed candidate relocation pairs
+are diagnosed instead of being partially rewritten. Other targets retain their
+existing relocation behavior.
+
 ## Options
 
 Options are colon-delimited `key=value` pairs. When an option accepts more
@@ -61,9 +89,116 @@ Configure ELD/LLVM normally, then build the plugin target:
 cmake --build build-eld --target ReassignSectionAddresses
 ```
 
-The plugin-local test covers sequential, MD5, SHA1, duplicate-content,
-diagnostic, and gzip behavior. Run it with the configured ELD `llvm-lit`
+The plugin-local tests cover sequential, MD5, SHA1, duplicate-content,
+diagnostic, and gzip behavior. Run them with the configured ELD `llvm-lit`
 driver, or run the plugin test target provided by the ELD build.
+
+### Hexagon local-string address tests
+
+`ReassignSectionAddressesHexagonPIC.test` provides a small, explicit
+disassembly example. The six `ReassignLocalStrings*.test` cases add a broader
+C/C++ matrix, driven by `test/Inputs/check_address_patterns.py`:
+
+| Output | Compilation | Optimization levels |
+| --- | --- | --- |
+| Fixed-address executable (`--static`) | `-fno-pic` | `-O0`, `-O2`, `-Oz` |
+| Fixed-address executable (`--static`) | `-fpic`, `-fPIC` | `-O0`, `-O2`, `-Oz` |
+| Shared library (`--shared`) | `-fpic`, `-fPIC` | `-O0`, `-O2`, `-Oz` |
+| PIE executable (`--pie`) | `-fpie`, `-fPIE` | `-O0`, `-O2`, `-Oz` |
+
+Each combination runs with sequential, MD5, and SHA1 assignment, two layout
+addresses, and serial/parallel linking: 504 links across both languages.
+Sequential cases include zero, crossing the high-bit boundary, and wrapping
+from `0xffffffff` to zero. The source fixtures exercise:
+
+- Array decay, `&array`, `&array[0]`, interior addresses, pointer and integer
+  returns, pointer and integer call arguments, and two strings in one call.
+- Variadic calls, indirect calls through a function pointer, and passing the
+  string address as a stack argument after exhausting the argument registers.
+- Repeated logging macros, GNU statement expressions, nested scopes reusing
+  a local name, repeated references to one string, and volatile pointer-value
+  stores. Strings are never dereferenced at their assigned addresses.
+- Duplicate contents across translation units and two `(DSECT)` sections,
+  empty strings, embedded NULs, inline functions, and C++ templates/lambdas.
+
+The checker reads the original object symbols and bytes, independently checks
+hash values, and locates every address operand using the input relocations.
+It checks linked immediate values, static retained relocation types/addends,
+unchanged function sizes, and byte-identical serial/parallel images. A normal
+non-DSECT string is a negative control. DSECT sections must be non-allocated
+and outside every `PT_LOAD` file range, with no dynamic relocations in these
+self-contained images. Non-PIC immediate stores, `combine`, and duplex
+instruction forms are checked as well as the PIC rewrite.
+
+The fixtures also check `__PIC__`/`__PIE__` at compile time to verify the
+requested small/large model. PIE output must have `ET_DYN`, `DF_1_PIE`, a
+dynamic segment, and the requested entry point; shared libraries must not
+have `DF_1_PIE`. Merely linking PIC objects into a fixed-address executable
+does not count as PIE coverage. ELD does not retain static relocations for
+shared libraries or PIEs, so the checker locates their instruction operands
+from the original input relocations instead.
+
+These tests require Hexagon, `llvm-readelf` with JSON output, `llvm-objdump`,
+and an ELD build containing the rewrite. They run through the same lit
+configuration in source-tree and standalone builds; no target headers or
+runtime libraries are required. A small assembly fixture supplies the restore
+helper emitted at `-Oz`. Validation inspects ELF files and disassembly, not
+execution on target hardware. Test artifacts remain in lit's output directory.
+
+### Additional Hexagon permutations
+
+The ten `ReassignPermutations*.test` groups use
+`test/Inputs/check_address_permutations.py` for focused coverage outside the
+504-link matrix. They check 137 successful links plus four negative-control
+links in C/C++ (COMDAT is C++ and the relaxation fixture is assembly):
+
+- Full LTO, ThinLTO, and LTO using an external assembler.
+- Compilation without function/data section splitting; `-O3`, `-Os`, DWARF v5
+  debug information, `-G0`/`-G8`, `-mlong-calls`, hidden visibility, and
+  `-fmerge-all-constants`. CPU variants are `hexagonv68`, `hexagonv73`, and
+  `hexagonv79`, all supported by the Hexagon 23.0.01 package. That package
+  does not support the older `-mv60` option.
+- Archive extraction, `--whole-archive`, and intermediate `-r` links.
+- Reversed object order and section sorting, explicit `PHDRS` and alignment,
+  `--gc-sections` with/without `KEEP()`, `--strip-all`, and `--discard-all`.
+  Stripped code is compared with the independently validated unstripped image.
+- Static PIE (`--static --pie --no-dynamic-linker`) and a PIE mixing PIC and
+  PIE objects. Sequential IDs are allowed to change with input order, while
+  their references must remain correct; content hashes remain stable.
+- Actual instruction deletion by `--relax` and section-selective relaxation,
+  together with address rewriting in the relaxed fragment.
+- Cross-TU inline COMDAT definitions, weak-only and strong-overridden data,
+  aliases, both object orders, and `-Bsymbolic`.
+
+Archive cases require `llvm-ar`; the external-assembler LTO case requires
+`llvm-mc`. These are optional lit features, not requirements for all plugins.
+The tests can use the 23.0.01 package's compiler, archiver, assembler, and
+ELF inspection tools, but the ELD linker must include the new rewrite.
+
+For LTO, preserving symbols when compiling bitcode is **not sufficient**.
+Pass the preservation option to ELD's native code-generation stage too:
+
+```sh
+ld.eld --shared first.bc second.bc \
+  --flto-options=codegen=-reloc-section-sym=none \
+  -T layout.t --plugin-config plugins.yaml -o image.so
+```
+
+If using the external LTO assembler, also supply
+`--flto-options=asmopts=--reloc-section-sym=none`. The negative-control tests
+confirm that omitting the LTO code-generation setting, or using an old archive
+member compiled without symbol preservation, leaves section-relative address
+computations unrepaired. Those are not successful ID-materialization cases.
+
+Two separate tests, `ReassignMergeStringContents.test` and
+`ReassignNoMergeStringContents.test`, are marked expected failures. They expose
+incorrect content hashes for `SHF_MERGE|SHF_STRINGS` inputs: the merge-fragment
+raw-data API uses an input-section offset that is not reliable after layout.
+`--no-merge-strings` does not avoid that path. Use ordinary named arrays in
+non-mergeable input sections for now. This differs from merely compiling the
+ordinary-array fixtures with `-fmerge-all-constants`, which passes. The tests
+assert the correct hashes and will report unexpected passes when the bug is
+fixed; they do not bless the incorrect IDs as supported behavior.
 
 ## Build standalone against an installed ELD package
 
@@ -135,7 +270,8 @@ architecture if necessary. The configuration does not load eld/test/lit.cfg.
 ELD_LLVM_LIT may be omitted when llvm-lit or lit is on PATH. FileCheck and not
 must be in ELD_LLVM_TOOLS_DIR (default: beside the runner). LLVM libraries
 default to the sibling lib directory; ELD_LLVM_LIBS_DIR overrides that path.
-The lit test also requires llvm-readelf; without it, lit marks the test unsupported.
+The general lit test requires llvm-readelf. Hexagon address tests additionally
+require llvm-objdump; lit marks tests with missing tools unsupported.
 
 The smoke test is ELDStandalone.ReassignSectionAddresses; the lit suite is
 ELDStandaloneLit.ReassignSectionAddresses. Use `ctest -R` to select either.

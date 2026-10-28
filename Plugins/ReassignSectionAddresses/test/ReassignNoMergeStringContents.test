@@ -1,0 +1,6 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# XFAIL: *
+# Disabling deduplication does not turn an SHF_MERGE|SHF_STRINGS input into a
+# normal region. It encounters the same after-layout raw-content bug as
+# ReassignMergeStringContents.test; --no-merge-strings is not a workaround.
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clang --compiler-flags="%clangopts" --language c --case no-merge-strings --link %link --readelf %readelf --objdump %objdump --work %t.dir
