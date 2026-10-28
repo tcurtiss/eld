@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump, llvm-ar
+# Archive extraction, whole-archive and intermediate relocatable linking.
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clang --compiler-flags="%clangopts" --language c --case objects --link %link --readelf %readelf --objdump %objdump --ar %ar --work %t.c.dir
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --case objects --link %link --readelf %readelf --objdump %objdump --ar %ar --work %t.cxx.dir

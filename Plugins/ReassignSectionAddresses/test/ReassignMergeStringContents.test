@@ -1,0 +1,7 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# XFAIL: *
+# Known bug: after layout, Chunk::getRawData for MergeStringFragment obtains
+# bytes through ELFSection::getContents(), whose input offset is no longer
+# reliable. The assigned hash does not match the original string bytes.
+# Keep checking the correct result so this becomes XPASS when fixed.
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clang --compiler-flags="%clangopts" --language c --case merge-strings --link %link --readelf %readelf --objdump %objdump --work %t.dir

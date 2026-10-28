@@ -181,8 +181,12 @@ ELD_LLVM_LIT may be omitted when llvm-lit (or lit) is on PATH. The LLVM tools
 directory defaults to the runner's directory and the library directory to
 its sibling lib. Override ELD_LLVM_TOOLS_DIR and ELD_LLVM_LIBS_DIR when needed,
 including when lit was installed separately with pip. Lit additionally
-requires FileCheck and not. llvm-readelf is optional; tests that use it must
-declare `REQUIRES: llvm-readelf`. HelloWorld does not require it.
+requires FileCheck and not. llvm-readelf and llvm-objdump are optional; tests
+that use them must declare `REQUIRES: llvm-readelf` or
+`REQUIRES: llvm-objdump`, respectively. They are available through `%readelf`
+and `%objdump`. Archive tests can use `%ar` and require `llvm-ar`;
+tests that invoke an external assembler can require `llvm-mc` (available on
+the configured tools PATH). HelloWorld does not require these optional tools.
 
 Plugins/lit.cfg derives its architecture from ELD_TARGET_TRIPLE. Supported
 names include ARM, AArch64, Hexagon, RISCV, RISCV64, and X86. ELD_TEST_TARGET

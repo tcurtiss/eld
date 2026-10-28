@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# GC/KEEP, PHDRS, ordering, stripping and static/mixed-model PIE.
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clang --compiler-flags="%clangopts" --language c --case layout --link %link --readelf %readelf --objdump %objdump --work %t.c.dir
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --case layout --link %link --readelf %readelf --objdump %objdump --work %t.cxx.dir

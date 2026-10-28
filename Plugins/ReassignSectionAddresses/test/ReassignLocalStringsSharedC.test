@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# C logging patterns in -fpic/-fPIC shared libraries: O0/O2/Oz, three assignment
+# algorithms, two layout bases, and serial/parallel linking.
+RUN: %python %p/Inputs/check_address_patterns.py --compiler %clang --compiler-flags="%clangopts" --language c --mode shared --link %link --readelf %readelf --objdump %objdump --work %t.dir

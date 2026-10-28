@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# Weak-only, strong override, aliases, reversed object order and -Bsymbolic.
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clang --compiler-flags="%clangopts" --language c --case weak --link %link --readelf %readelf --objdump %objdump --work %t.c.dir
+RUN: %python %p/Inputs/check_address_permutations.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --case weak --link %link --readelf %readelf --objdump %objdump --work %t.cxx.dir
