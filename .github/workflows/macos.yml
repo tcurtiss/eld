@@ -21,17 +21,14 @@ on:
         type: string
         default: ""
 
-permissions:
-  contents: write
-
 jobs:
   build-macos:
     if: |
-      (github.repository == 'qualcomm/eld' &&
+      github.repository == 'qualcomm/eld' &&
        (github.event_name == 'schedule' ||
         github.event_name == 'workflow_dispatch' ||
-        inputs.pr_sha != '')) ||
-      github.event_name == 'workflow_call'
+        github.event_name == 'workflow_call' ||
+        inputs.pr_sha != '')
     name: macOS
     runs-on: macos-latest
     timeout-minutes: 180
@@ -45,7 +42,7 @@ jobs:
 
     steps:
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 #v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 #v7.1.0
         with:
           python-version: '3.14'
 
@@ -121,6 +118,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
             -DLLVM_ENABLE_PROJECTS="clang" \
+            -DCLANG_ENABLE_CIR=OFF \
             -DLLVM_ENABLE_ASSERTIONS:BOOL=ON \
             -DLLVM_ENABLE_LLD:BOOL=OFF \
             -DLLVM_TARGETS_TO_BUILD="ARM;AArch64;RISCV;Hexagon;X86" \
