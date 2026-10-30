@@ -66,8 +66,13 @@ ELD_TARGET_CC, ELD_TARGET_CXX, and ELD_TARGET_LD in the package's bin directory,
 preferring clang/clang++ with hexagon-clang/hexagon-clang++ fallbacks. Override
 those paths when the target tools are elsewhere. ELD_TARGET_TRIPLE selects
 the target architecture, ELD_TARGET_CXX_FLAGS adds flags for both target
-compiler drivers, and ELD_TARGET_LD_FLAGS adds linker flags. These settings
-do not affect compilation of the host plugin.
+compiler drivers, and ELD_TARGET_LD_FLAGS adds linker flags. CMake parses these
+strings with the host's command-line syntax; quote paths with spaces and double
+literal backslashes on Unix. These settings do not affect compilation of the
+host plugin. Direct smoke runs accept repeatable `--target-cxx-arg=...` and
+`--target-ld-arg=...` options without further shell splitting. See the
+[framework test documentation](../README.md#standalone-tests) for JSON argument
+arrays in direct lit invocations and platform validation limits.
 
 The reference-count fixtures depend on target code generation. For ARM, use
 `ELD_TARGET_TRIPLE=armv7a-none-eabi`; for Hexagon, use

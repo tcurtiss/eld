@@ -37,8 +37,10 @@ and bin directories or a package containing those directories under Tools.
 ELD_ROOT or CMAKE_PREFIX_PATH can also supply the installation prefix.
 The public plugin headers and host LinkerWrapper library are required; the
 Linux build also requires the package's libc++ link files (see below).
-Building plugins does not require LLVM sources, LLVM CMake files, Python,
-lit, or a target compiler.
+Standalone builds create plugin libraries by default. Enabling BUILD_TESTING
+adds CTest and discovers target test tools; ELD_ENABLE_LIT_TESTS adds lit suites.
+Building plugins without tests does not require LLVM sources, LLVM CMake files,
+Python, lit, or a target compiler.
 
 All discovered plugins build by default. Select a subset with
 `-DELD_PLUGINS=HelloWorldPlugin`; quote semicolon-separated lists when
@@ -194,8 +196,19 @@ overrides the lit architecture (for example RISCV64 or RISCV64_default);
 it does not override an explicitly supplied compiler target triple. Use
 ELD_TARGET_TRIPLE to select the same target for smoke and lit tests.
 ELD_TARGET_CXX_FLAGS supplies additional flags to both target compiler
-drivers; ELD_TARGET_LD_FLAGS supplies target linker flags. Host compiler
-flags are independent of these settings.
+drivers; ELD_TARGET_LD_FLAGS supplies target linker flags. CMake parses these
+strings using the host's command-line syntax (Windows or Unix), preserving
+quoted paths with spaces. Unix parsing treats backslashes as escapes; double
+them when a literal backslash is needed. Parsed arguments are transported as
+JSON arrays, not reparsed with Python's POSIX `shlex.split`. Host compiler flags
+are independent of these settings.
+
+For direct lit invocations, `-Dtarget_cxx_args` and `-Dtarget_ld_args` accept JSON
+arrays of individual arguments, for example
+`'-Dtarget_cxx_args=["-IC:\\SDK directory\\include", "-G0"]'` in a POSIX shell.
+Quote the complete parameter according to the invoking shell. Legacy
+`-Dtarget_cxx_flags` and `-Dtarget_ld_flags` strings still use POSIX shell syntax
+on every host. Prefer CTest for automatic host-native flag parsing.
 
 CTest and lit arrange runtime library search paths: LD_LIBRARY_PATH on
 Linux, DYLD_LIBRARY_PATH on macOS, and PATH on Windows. The same paths are
@@ -220,5 +233,7 @@ Keep regression tests under the plugin's test directory. Register them with
 `eld_add_standalone_test(NAME ... TARGET ... SCRIPT ...)` and
 `eld_add_standalone_lit_test(NAME ... TARGET ... TEST_DIR ...)` when
 standalone BUILD_TESTING is enabled. See HelloWorldPlugin for an example.
-The smoke helper passes package, compiler, linker, flags, and library-path
-arguments to the Python script; the lit helper uses Plugins/lit.cfg.
+The smoke helper passes package, compiler, linker, and library-path arguments
+to the Python script, plus `--target-cxx-args` and `--target-ld-args` as JSON
+arrays of strings. The lit helper uses Plugins/lit.cfg with the corresponding
+`target_cxx_args` and `target_ld_args` parameters.

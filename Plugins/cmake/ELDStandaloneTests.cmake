@@ -2,6 +2,13 @@
 # This module is included only for standalone builds with BUILD_TESTING=ON.
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include("${CMAKE_CURRENT_LIST_DIR}/ELDStandaloneTestArguments.cmake")
+
+add_test(NAME ELDStandalone.TestArguments
+  COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_LIST_DIR}/tests/test_arguments.py"
+    --cmake "${CMAKE_COMMAND}"
+    --plugins-dir "${CMAKE_CURRENT_LIST_DIR}/..")
 
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
   add_test(NAME ELDStandalone.RuntimeConfiguration
@@ -110,6 +117,8 @@ function(eld_add_standalone_test)
         "-DREADELF=${CMAKE_READELF}"
         -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/tests/NoRuntimePath.cmake")
   endif()
+  eld_standalone_test_arguments(_cxx_arguments "${ELD_TARGET_CXX_FLAGS}")
+  eld_standalone_test_arguments(_ld_arguments "${ELD_TARGET_LD_FLAGS}")
   add_test(NAME "ELDStandalone.${TEST_NAME}"
     COMMAND "${Python3_EXECUTABLE}" "${TEST_SCRIPT}"
       --plugin-dir "$<TARGET_FILE_DIR:${TEST_TARGET}>"
@@ -120,9 +129,8 @@ function(eld_add_standalone_test)
       --target-cxx "${ELD_TARGET_CXX}"
       --target-ld "${ELD_TARGET_LD}"
       --target-triple "${ELD_TARGET_TRIPLE}"
-      # = keeps dash-leading flags from being parsed as Python options.
-      "--target-cxx-flags=${ELD_TARGET_CXX_FLAGS}"
-      "--target-ld-flags=${ELD_TARGET_LD_FLAGS}")
+      "--target-cxx-args=${_cxx_arguments}"
+      "--target-ld-args=${_ld_arguments}")
 endfunction()
 
 function(eld_add_standalone_lit_test)
@@ -137,6 +145,8 @@ function(eld_add_standalone_lit_test)
   endif()
   # lit.cfg prepares the host runtime search paths, including custom library
   # locations. Use the target directory for multi-configuration generators.
+  eld_standalone_test_arguments(_cxx_arguments "${ELD_TARGET_CXX_FLAGS}")
+  eld_standalone_test_arguments(_ld_arguments "${ELD_TARGET_LD_FLAGS}")
   add_test(NAME "ELDStandaloneLit.${TEST_NAME}"
     COMMAND ${ELD_LIT_COMMAND} -v
       "-Deld_obj_root=${CMAKE_BINARY_DIR}"
@@ -151,8 +161,8 @@ function(eld_add_standalone_lit_test)
       "-Dtarget_cc=${ELD_TARGET_CC}"
       "-Dtarget_cxx=${ELD_TARGET_CXX}"
       "-Dtarget_ld=${ELD_TARGET_LD}"
-      "-Dtarget_cxx_flags=${ELD_TARGET_CXX_FLAGS}"
-      "-Dtarget_ld_flags=${ELD_TARGET_LD_FLAGS}"
+      "-Dtarget_cxx_args=${_cxx_arguments}"
+      "-Dtarget_ld_args=${_ld_arguments}"
       "-Dpython_executable=${Python3_EXECUTABLE}"
       "${TEST_TEST_DIR}")
 endfunction()
