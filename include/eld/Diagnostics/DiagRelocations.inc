@@ -79,6 +79,8 @@ DIAG(error_relocations_plugin, DiagnosticEngine::Error, "unable to apply relocat
 DIAG(error_hexagon_absolute_address, DiagnosticEngine::Error,
      "%0: cannot rewrite Hexagon PC-relative address of absolute symbol '%1' "
      "at offset 0x%2: %3")
+DIAG(error_hexagon_absolute_dynamic, DiagnosticEngine::Error,
+     "%0: cannot materialize Hexagon absolute symbol '%1': %2")
 DIAG(verbose_remapped_internal_reloc, DiagnosticEngine::Verbose,
      "Remapped Internal Relocation %0 to %1 in section %2")
 DIAG(warn_unsupported_reloc_for_ifunc, DiagnosticEngine::Warning,

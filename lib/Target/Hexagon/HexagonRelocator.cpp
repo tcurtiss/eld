@@ -279,19 +279,11 @@ bool HexagonRelocator::prepareRelocations(ELFSection &Section) {
       Section.isIgnore() || Section.isDiscard())
     return true;
 
-  auto IsAbsolute = [&](Relocation *R) {
-    ResolveInfo *S = R->symInfo();
-    // setSymbolAddress clears the fragment ref, preserving the original
-    // binding. ResolveInfo::isAbsolute alone does not recognize that case.
-    return S && S->isDefine() && !S->isDyn() && !S->isFile() &&
-           S->type() != ResolveInfo::ThreadLocal &&
-           S->type() != ResolveInfo::Section && S->outSymbol() &&
-           !S->outSymbol()->hasFragRef() && !m_Target.isSymbolPreemptible(*S);
-  };
   auto IsCandidate = [&](Relocation *R) {
     if ((R->type() != llvm::ELF::R_HEX_6_PCREL_X &&
          R->type() != llvm::ELF::R_HEX_B32_PCREL_X) ||
-        m_Target.isRelocationRelaxed(R) || !IsAbsolute(R))
+        m_Target.isRelocationRelaxed(R) || !R->symInfo() ||
+        !m_Target.isNonPreemptibleAbsolute(*R->symInfo()))
       return false;
     if (R->type() == llvm::ELF::R_HEX_6_PCREL_X)
       return true;

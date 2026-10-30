@@ -1,6 +1,8 @@
 # REQUIRES: hexagon
-# Absolute symbols require an absolute immediate, not an add(pc) calculation
-# that changes when the shared object is loaded at another base address.
+# Any eligible address-materialization pair is rewritten, independent of
+# compiler PIC flags or final output type. The shared and static links below
+# use the same hand-written assembly inputs; shared/PIE rebasing must not add
+# load bias to the absolute value.
 RUN: %llvm-mc -triple=hexagon -filetype=obj %p/Inputs/references.s -o %t.refs.o
 RUN: %llvm-mc -triple=hexagon -filetype=obj %p/Inputs/absolute.s -o %t.abs.o
 RUN: %link --shared --threads --thread-count 4 -T %p/Inputs/layout.t %t.refs.o %t.abs.o -o %t.so
