@@ -6,9 +6,9 @@ the selected package. It does not import llvm-lit or FileCheck.
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -24,6 +24,17 @@ def run(command, env, cwd):
     return result.stdout
 
 
+def argument_list(value):
+    try:
+        arguments = json.loads(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("invalid JSON argument list: " + str(error))
+    if not isinstance(arguments, list) or not all(
+            isinstance(argument, str) for argument in arguments):
+        raise argparse.ArgumentTypeError("expected a JSON array of strings")
+    return arguments
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plugin-dir", required=True)
@@ -34,8 +45,10 @@ def main():
     parser.add_argument("--target-cxx", required=True)
     parser.add_argument("--target-ld", required=True)
     parser.add_argument("--target-triple", default="")
-    parser.add_argument("--target-cxx-flags", default="")
-    parser.add_argument("--target-ld-flags", default="")
+    parser.add_argument("--target-cxx-args", type=argument_list, default=[])
+    parser.add_argument("--target-ld-args", type=argument_list, default=[])
+    parser.add_argument("--target-cxx-arg", action="append", default=[])
+    parser.add_argument("--target-ld-arg", action="append", default=[])
     args = parser.parse_args()
 
     plugin_dir = Path(args.plugin_dir).resolve()
@@ -65,7 +78,7 @@ def main():
         compile_command = [args.target_cc or args.target_cxx]
         if args.target_triple:
             compile_command.append("--target=" + args.target_triple)
-        compile_command += shlex.split(args.target_cxx_flags)
+        compile_command += args.target_cxx_args + args.target_cxx_arg
         compile_command += ["-c", str(source), "-o", str(obj),
                             "-ffunction-sections", "-fdata-sections"]
         run(compile_command, env, work)
@@ -74,7 +87,7 @@ def main():
         config_path = work / "plugins.yaml"
         config_path.write_text(config)
         link_command = [args.target_ld]
-        link_command += shlex.split(args.target_ld_flags)
+        link_command += args.target_ld_args + args.target_ld_arg
         link_command += [str(obj), "-e", "main", "-o", str(output),
                          "--plugin-config", str(config_path),
                          "--trace=plugin"]

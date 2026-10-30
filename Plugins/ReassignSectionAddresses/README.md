@@ -272,11 +272,23 @@ must be in ELD_LLVM_TOOLS_DIR (default: beside the runner). LLVM libraries
 default to the sibling lib directory; ELD_LLVM_LIBS_DIR overrides that path.
 The general lit test requires llvm-readelf. Hexagon address tests additionally
 require llvm-objdump; lit marks tests with missing tools unsupported.
+The Hexagon address tests also require ELD's plugin-assigned absolute-address
+rewrite support; older linkers can pass the smoke test but fail these fixtures.
+Python-driven matrix fixtures currently do not support embedded double quotes
+in extra compiler flags. Use simple flags such as `-G0` for the full matrix;
+the smoke test and direct compiler RUN lines preserve quoted arguments.
 
 The smoke test is ELDStandalone.ReassignSectionAddresses; the lit suite is
 ELDStandaloneLit.ReassignSectionAddresses. Use `ctest -R` to select either.
 For multi-configuration generators, build with `--config Release` and run
 CTest with `-C Release`. The smoke script is kept at test/standalone_test.py.
+
+CMake parses ELD_TARGET_CXX_FLAGS and ELD_TARGET_LD_FLAGS with the host's
+command-line syntax; quote paths with spaces and double literal backslashes on
+Unix. Direct smoke runs accept repeatable `--target-cxx-arg=...` and
+`--target-ld-arg=...` options without further shell splitting. See the
+[framework test documentation](../README.md#standalone-tests) for JSON argument
+arrays in direct lit invocations and platform validation limits.
 
 When loading the plugin manually, include its output directory and the ELD
 runtime library directory in LD_LIBRARY_PATH on Linux, DYLD_LIBRARY_PATH

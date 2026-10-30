@@ -108,7 +108,10 @@ ctest --test-dir build-helloworld --output-on-failure
 Use the target triple supported by your package. The lit architecture is
 derived from ELD_TARGET_TRIPLE; ELD_TEST_TARGET overrides it when necessary.
 ELD_TARGET_CXX_FLAGS and ELD_TARGET_LD_FLAGS provide extra test-input compiler
-and linker flags. They do not change host plugin compilation.
+and linker flags, parsed by CMake with the host's command-line syntax. Quote
+paths containing spaces; on Unix, double literal backslashes. They do not
+change host plugin compilation. See the [framework test documentation](../README.md#standalone-tests)
+for direct lit argument-array parameters and platform validation limits.
 
 The smoke test is named ELDStandalone.HelloWorldPlugin, and the lit test is
 ELDStandaloneLit.HelloWorldPlugin; select either with `ctest -R`. Lit needs
@@ -130,8 +133,11 @@ python3 /path/to/Plugins/HelloWorldPlugin/test/standalone_test.py \
 
 Use the resolved Tools directory for --tools-dir when the package contains
 one. Override --library-dir and --runtime-dir for custom library locations.
-Use `--target-cxx-flags=-G0` or `--target-ld-flags=--emit-relocs` syntax for
-dash-leading arguments.
+Use `--target-cxx-arg=-G0` or `--target-ld-arg=--emit-relocs` for additional
+arguments. Repeat the option for each argument, quoting each value according
+to the invoking shell. Values are passed directly to the tool, without shell
+splitting, so paths with spaces and backslashes remain intact. CTest supplies
+the equivalent `--target-cxx-args` and `--target-ld-args` JSON arrays automatically.
 
 See [the plugin framework README](../README.md) for package discovery,
 platform limitations, and the CMake helper interface.
