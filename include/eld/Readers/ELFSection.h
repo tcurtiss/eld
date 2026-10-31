@@ -20,7 +20,6 @@
 #include "eld/SymbolResolver/LDSymbol.h"
 #include "eld/Target/LDFileFormat.h"
 #include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
 #include <string>
@@ -326,11 +325,6 @@ public:
   }
   size_t getRelocationCount() const { return Relocations.size(); }
   void clearRelocations() { Relocations.clear(); }
-  template <typename PredicateT>
-  void removeRelocationsIf(PredicateT Predicate) {
-    Relocations.erase(llvm::remove_if(Relocations, Predicate),
-                      Relocations.end());
-  }
   void appendRelocations(RelocationRange From) {
     Relocations.insert(Relocations.end(), From.begin(), From.end());
   }
