@@ -1,0 +1,80 @@
+# REQUIRES: llvm-readelf
+# Mapping and debug JSON combine all modified sections. Debug includes every
+# symbol even without claimed references.
+RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
+RUN: rm -f %t.default.out.reassign.debug.json %t.default.out.reassign.csv
+RUN: sed 's/:output=.*//' %p/Inputs/PluginConfigSequential.yaml > %t.default.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.default.out --plugin-config %t.default.yaml
+RUN: %python -c "from pathlib import Path; assert not list(Path('%t.default.out').parent.glob(Path('%t.default.out').name+'.reassign.*'))"
+RUN: sed 's/:output=.*/:debug=yes/' %p/Inputs/PluginConfigSequential.yaml > %t.debug.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.debug.out --plugin-config %t.debug.yaml
+RUN: %python %p/Inputs/check_section_outputs.py %t.debug.out reassign_a reassign_b
+RUN: %python -c "import json; d=json.load(open('%t.debug.out.reassign.debug.json')); assert [s['section'] for s in d['sections']]==['.reassign_a','.reassign_b']"
+RUN: test ! -e %t.debug.out.reassign.csv
+# Serial and parallel debug snapshots are byte-identical for the same output.
+RUN: cp %t.debug.out.reassign.debug.json %t.parallel.json
+RUN: %link --no-threads %t.o -T %p/Inputs/script.t -e main -o %t.debug.out --plugin-config %t.debug.yaml
+RUN: cmp %t.parallel.json %t.debug.out.reassign.debug.json
+# Hash preprocessing with threads enabled preserves debug symbol order too.
+RUN: sed 's/hash=sequential/hash=md5/' %t.debug.yaml > %t.hash.yaml
+RUN: %link --thread-count 4 %t.o -T %p/Inputs/script.t -e main -o %t.hash.out --plugin-config %t.hash.yaml
+RUN: cp %t.hash.out.reassign.debug.json %t.hash-parallel.json
+RUN: %link --no-threads %t.o -T %p/Inputs/script.t -e main -o %t.hash.out --plugin-config %t.hash.yaml
+RUN: cmp %t.hash-parallel.json %t.hash.out.reassign.debug.json
+# Debug-only configuration works independently of CSV.
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.debug-only.out --plugin-config %p/Inputs/PluginConfigDebugOnly.yaml
+RUN: %python %p/Inputs/check_section_outputs.py %t.debug-only.out reassign_a
+RUN: test ! -e %t.debug-only.out.reassign.csv
+# Existing artifacts are untouched when their options are disabled.
+RUN: cp %t.parallel.json %t.default.out.reassign.debug.json
+RUN: cp %t.parallel.json %t.default.out.reassign.csv
+RUN: sed 's/start=0x100/start=0x100:debug=no:output=none/' %t.default.yaml > %t.disabled.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.default.out --plugin-config %t.disabled.yaml
+RUN: cmp %t.parallel.json %t.default.out.reassign.debug.json
+RUN: cmp %t.parallel.json %t.default.out.reassign.csv
+RUN: rm -f %t.default.out.reassign.debug.json %t.default.out.reassign.csv
+# Missing sections and sections without object symbols create no artifacts.
+RUN: sed 's/section=.reassign_a,.reassign_b/section=.not_present,.text/;s/:debug=yes/:debug=yes:output=csv/' %t.debug.yaml > %t.missing.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.missing.out --plugin-config %t.missing.yaml
+RUN: %python -c "from pathlib import Path; assert not list(Path('%t.missing.out').parent.glob(Path('%t.missing.out').name+'.reassign.*'))"
+# CSV escaping preserves commas, quotes, CR/LF; debug retains the trailing NUL.
+RUN: sed 's/section=.reassign_a/section=.reassign_csv/' %p/Inputs/PluginConfigDebug.yaml > %t.csv.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.csv.out --plugin-config %t.csv.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.csv.out --format csv --sections .reassign_csv
+RUN: %python %p/Inputs/check_section_outputs.py %t.csv.out reassign_csv
+# Cleaning applies only to CSV, not raw debug bytes.
+RUN: sed 's/section=.reassign_a/section=.reassign_clean/;s/:debug=yes/:debug=yes:clean_strings=yes/' %p/Inputs/PluginConfigDebug.yaml > %t.clean.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.clean.out --plugin-config %t.clean.yaml
+RUN: %python -c "import csv; assert list(csv.reader(open('%t.clean.out.reassign.csv',newline='')))==[['section','address','string'],['.reassign_clean','0x00000100','A\t\tBCD']]"
+RUN: %python %p/Inputs/check_section_outputs.py %t.clean.out reassign_clean
+# Without cleaning, the CSV preserves non-ASCII and control bytes verbatim.
+RUN: sed 's/:clean_strings=yes//' %t.clean.yaml > %t.raw.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.raw.out --plugin-config %t.raw.yaml
+RUN: %python -c "import csv; assert list(csv.reader(open('%t.raw.out.reassign.csv',encoding='latin1',newline='')))==[['section','address','string'],['.reassign_clean','0x00000100','A\t\tB\nC\rD\x01\x80']]"
+# Both outputs preserve the original section name, with no filename encoding.
+RUN: sed 's/ .reassign_a (DSECT)/ ".reassign\/a" (DSECT)/' %p/Inputs/script.t > %t.escaped.t
+RUN: sed 's/section=.reassign_a/section=.reassign\/a/' %p/Inputs/PluginConfigDebug.yaml > %t.escaped.yaml
+RUN: %link %linkopts %t.o -T %t.escaped.t -e main -o %t.escaped.out --plugin-config %t.escaped.yaml
+RUN: test -e %t.escaped.out.reassign.csv
+RUN: test -e %t.escaped.out.reassign.debug.json
+RUN: %python -c "import json; d=json.load(open('%t.escaped.out.reassign.debug.json')); assert d['sections'][0]['section']=='.reassign/a'"
+# Former per-section filename collisions no longer restrict debug output.
+RUN: sed 's/section=.reassign_a/section=.reassign_a,reassign_a/' %p/Inputs/PluginConfigDebug.yaml > %t.collision.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.collision.out --plugin-config %t.collision.yaml
+RUN: %python %p/Inputs/check_section_outputs.py %t.collision.out reassign_a
+# Combined output has no filename collision for differently named sections.
+RUN: sed 's/ .reassign_b (DSECT)/ reassign_a (DSECT)/' %p/Inputs/script.t > %t.names.t
+RUN: cp %t.collision.yaml %t.names.yaml
+RUN: %link %linkopts %t.o -T %t.names.t -e main -o %t.names.out --plugin-config %t.names.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.names.out --format csv --sections .reassign_a reassign_a
+RUN: %python -c "import json; d=json.load(open('%t.names.out.reassign.debug.json')); assert [(s['section'], len(s['symbols'])) for s in d['sections']]==[('.reassign_a',3),('reassign_a',2)]"
+# Failure to open derived artifact paths fails the link, including gzip.
+RUN: mkdir -p %t.csv-failure.out.reassign.csv
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.csv-failure.out --plugin-config %p/Inputs/PluginConfigSequential.yaml 2>&1 | %filecheck %s --check-prefix=CSV-ERROR
+RUN: mkdir -p %t.gzip-failure.out.reassign.csv.gz
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.gzip-failure.out --plugin-config %p/Inputs/PluginConfigGzip.yaml 2>&1 | %filecheck %s --check-prefix=CSV-ERROR
+RUN: mkdir -p %t.json-failure.out.reassign.debug.json
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.json-failure.out --plugin-config %t.debug.yaml 2>&1 | %filecheck %s --check-prefix=JSON-ERROR
+
+CSV-ERROR: failed to write mapping output
+JSON-ERROR: failed to write debug JSON

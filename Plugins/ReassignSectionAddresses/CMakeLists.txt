@@ -5,6 +5,9 @@ find_package(ZLIB REQUIRED)
 if(ELD_STANDALONE)
   eld_standalone_require_api(ReassignSectionAddresses LinkerWrapper.h
                               setSymbolAddress)
+  eld_standalone_require_api(ReassignSectionAddresses LinkerWrapper.h claimUse)
+  eld_standalone_require_api(ReassignSectionAddresses LinkerWrapper.h
+                              isSymbolPreemptible)
   eld_add_standalone_plugin(ReassignSectionAddresses
     SOURCES ${SOURCES}
     LIBRARIES ZLIB::ZLIB)

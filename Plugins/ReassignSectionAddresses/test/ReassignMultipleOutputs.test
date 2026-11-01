@@ -1,0 +1,67 @@
+# REQUIRES: llvm-readelf
+# Multiple output formats share assignment/deduplication. Gzip compresses
+# every selected mapping and the optional combined debug JSON.
+RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
+RUN: sed 's/output=csv/output=csv,json:debug=yes/' %p/Inputs/PluginConfigSequential.yaml > %t.both.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.both.out --plugin-config %t.both.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.both.out --format csv --sections .reassign_a .reassign_b
+RUN: %python %p/Inputs/check_mapping_output.py %t.both.out --format json --sections .reassign_a .reassign_b
+RUN: %python %p/Inputs/check_section_outputs.py %t.both.out reassign_a reassign_b
+# Reversed/duplicate format lists neither duplicate records nor reset IDs.
+RUN: sed 's/output=csv,json/output=json,csv,json,csv/' %t.both.yaml > %t.duplicates.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.duplicates.out --plugin-config %t.duplicates.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.duplicates.out --format csv --sections .reassign_a .reassign_b
+RUN: %python %p/Inputs/check_mapping_output.py %t.duplicates.out --format json --sections .reassign_a .reassign_b
+# Gzip and cleaning apply to both formats; debug retains all original bytes.
+RUN: sed 's/section=.reassign_a,.reassign_b/section=.reassign_clean/;s/:debug=yes/:debug=yes:gzip=yes:clean_strings=yes/' %t.both.yaml > %t.gzip.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.gzip.out --plugin-config %t.gzip.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.gzip.out --format csv --gzip --clean --sections .reassign_clean
+RUN: %python %p/Inputs/check_mapping_output.py %t.gzip.out --format json --gzip --clean --sections .reassign_clean
+RUN: %python %p/Inputs/check_section_outputs.py %t.gzip.out reassign_clean --gzip
+# Debug-only output obeys gzip even with output=none.
+RUN: sed 's/output=csv,json/output=none:gzip=yes/' %t.both.yaml > %t.debug-only.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.debug-only.out --plugin-config %t.debug-only.yaml
+RUN: %python %p/Inputs/check_section_outputs.py %t.debug-only.out reassign_a reassign_b --gzip
+RUN: test ! -e %t.debug-only.out.reassign.csv.gz
+RUN: test ! -e %t.debug-only.out.reassign.json.gz
+# The last output= key replaces the prior selection; none disables mappings.
+RUN: sed 's/output=csv,json/output=csv,json:output=none/' %t.both.yaml > %t.none.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.none.out --plugin-config %t.none.yaml
+RUN: test ! -e %t.none.out.reassign.csv
+RUN: test ! -e %t.none.out.reassign.json
+RUN: %python %p/Inputs/check_section_outputs.py %t.none.out reassign_a reassign_b
+# Both formats omit artifacts when no symbols are modified, even with gzip.
+RUN: sed 's/section=.reassign_clean/section=.missing,.text/' %t.gzip.yaml > %t.empty.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.empty.out --plugin-config %t.empty.yaml
+RUN: %python -c "from pathlib import Path; assert not list(Path('%t.empty.out').parent.glob(Path('%t.empty.out').name+'.reassign.*'))"
+# Reject empty, mixed-none and unknown format list items.
+RUN: sed 's/output=csv,json/output=csv,none/' %t.both.yaml > %t.invalid-none.yaml
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-none.out --plugin-config %t.invalid-none.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
+RUN: sed 's/output=csv,json/output=csv,xml/' %t.both.yaml > %t.invalid-format.yaml
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-format.out --plugin-config %t.invalid-format.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
+RUN: sed 's/output=csv,json/output=/' %t.both.yaml > %t.invalid-empty.yaml
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-empty.out --plugin-config %t.invalid-empty.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
+RUN: sed 's/output=csv,json/output=csv,/' %t.both.yaml > %t.invalid-trailing.yaml
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-trailing.out --plugin-config %t.invalid-trailing.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
+RUN: sed 's/output=csv,json/output=,json/' %t.both.yaml > %t.invalid-leading.yaml
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-leading.out --plugin-config %t.invalid-leading.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
+RUN: sed 's/output=csv,json/output=csv,,json/' %t.both.yaml > %t.invalid-middle.yaml
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-middle.out --plugin-config %t.invalid-middle.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
+# A failure in either mapping or compressed debug output fails the link.
+RUN: mkdir -p %t.json-failure.out.reassign.json
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.json-failure.out --plugin-config %t.both.yaml 2>&1 | %filecheck %s --check-prefix=MAPPING-ERROR
+RUN: mkdir -p %t.csv-failure.out.reassign.csv
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.csv-failure.out --plugin-config %t.duplicates.yaml 2>&1 | %filecheck %s --check-prefix=MAPPING-ERROR
+RUN: mkdir -p %t.debug-failure.out.reassign.debug.json.gz
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.debug-failure.out --plugin-config %t.gzip.yaml 2>&1 | %filecheck %s --check-prefix=DEBUG-ERROR
+# Large outputs span multiple gzip buffer flushes. Previously written plain
+# artifacts are retained, and decompressed bytes must match them exactly.
+RUN: %clang %clangopts -c %p/Inputs/large_mapping.c -o %t.large.o
+RUN: %link %linkopts %t.o %t.large.o -T %p/Inputs/script.t -e main -o %t.large.out --plugin-config %t.both.yaml
+RUN: sed 's/:debug=yes/:debug=yes:gzip=yes/' %t.both.yaml > %t.large-gzip.yaml
+RUN: %link %linkopts %t.o %t.large.o -T %p/Inputs/script.t -e main -o %t.large.out --plugin-config %t.large-gzip.yaml
+RUN: %python -c "import gzip; from pathlib import Path; paths=[Path('%t.large.out.reassign.'+suffix) for suffix in ('csv','json','debug.json')]; assert all(len(p.read_bytes())>196608 and gzip.decompress(Path(str(p)+'.gz').read_bytes())==p.read_bytes() for p in paths)"
+
+INVALID: output= must be 'none' or a comma-separated list of 'csv' and 'json'
+MAPPING-ERROR: failed to write mapping output
+DEBUG-ERROR: failed to write debug JSON

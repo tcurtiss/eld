@@ -1,10 +1,10 @@
 # REQUIRES: hexagon, llvm-readelf, llvm-objdump
 # Check real C/C++ callers, not just symbol-table reassignment. Each function's
-# local string is referenced by name, then made SHN_ABS by the plugin after
+# local string may be referenced through a section symbol, then made SHN_ABS after
 # layout. The resulting code must return the ID without adding the load bias.
-RUN: %clang %clangopts -O2 -fPIC -ffunction-sections -fdata-sections -Wa,--reloc-section-sym=none -c %p/Inputs/address_refs.c -o %t.c.o
-RUN: %clangxx %clangxxopts -x c++ -O2 -fPIC -ffunction-sections -fdata-sections -Wa,--reloc-section-sym=none -c %p/Inputs/address_refs.c -o %t.cxx.o
-RUN: %clang %clangopts -O2 -fPIC -DSECOND_OBJECT -ffunction-sections -fdata-sections -Wa,--reloc-section-sym=none -c %p/Inputs/address_refs.c -o %t.second.o
+RUN: %clang %clangopts -O2 -fPIC -ffunction-sections -fdata-sections -c %p/Inputs/address_refs.c -o %t.c.o
+RUN: %clangxx %clangxxopts -x c++ -O2 -fPIC -ffunction-sections -fdata-sections -c %p/Inputs/address_refs.c -o %t.cxx.o
+RUN: %clang %clangopts -O2 -fPIC -DSECOND_OBJECT -ffunction-sections -fdata-sections -c %p/Inputs/address_refs.c -o %t.second.o
 
 RUN: %link --shared --threads --thread-count 4 %t.c.o %t.second.o -T %p/Inputs/address_refs.t --plugin-config %p/Inputs/PluginConfigAddressRefs.yaml -o %t.c.so
 RUN: %objdump -d %t.c.so | %filecheck %s --check-prefix=CODE --implicit-check-not="add(pc,"
@@ -26,8 +26,8 @@ RUN: %link --static --emit-relocs -e first %t.c.o %t.second.o -T %p/Inputs/addre
 RUN: %objdump -d %t.elf | %filecheck %s --check-prefix=CODE --implicit-check-not="add(pc,"
 RUN: %readelf -r %t.elf | %filecheck %s --check-prefix=RELOCS --implicit-check-not=PCREL
 
-# Non-PIC fixed-address callers must continue to work without rewriting.
-RUN: %clang %clangopts -O2 -fno-pic -ffunction-sections -fdata-sections -Wa,--reloc-section-sym=none -c %p/Inputs/address_refs.c -o %t.nonpic.o
+# Non-PIC fixed-address callers must retain their native absolute encodings.
+RUN: %clang %clangopts -O2 -fno-pic -ffunction-sections -fdata-sections -c %p/Inputs/address_refs.c -o %t.nonpic.o
 RUN: %link --static -e first %t.nonpic.o %t.second.o -T %p/Inputs/address_refs.t --plugin-config %p/Inputs/PluginConfigAddressRefs.yaml -o %t.nonpic.elf
 RUN: %objdump -d %t.nonpic.elf | %filecheck %s --check-prefix=CODE --implicit-check-not="add(pc,"
 
@@ -41,7 +41,4 @@ SYMBOLS-DAG: fedcba98 {{.*}} OBJECT LOCAL {{.*}} ABS first.fmt
 SYMBOLS-DAG: fedcba99 {{.*}} OBJECT LOCAL {{.*}} ABS second.fmt
 SYMBOLS-DAG: fedcba98 {{.*}} OBJECT LOCAL {{.*}} ABS third.fmt
 DYNAMIC: There are no relocations in this file.
-RELOCS: R_HEX_32_6_X {{.*}} first.fmt + 0
-RELOCS-NEXT: R_HEX_16_X {{.*}} first.fmt + 0
-RELOCS: R_HEX_32_6_X {{.*}} second.fmt + 0
-RELOCS-NEXT: R_HEX_16_X {{.*}} second.fmt + 0
+RELOCS: {{There are no relocations in this file.|contains 0 entries:}}

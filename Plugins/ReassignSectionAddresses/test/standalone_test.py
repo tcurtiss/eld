@@ -2,6 +2,8 @@
 """Package-only smoke test for ReassignSectionAddresses."""
 
 import argparse
+import csv
+import gzip
 import json
 import os
 from pathlib import Path
@@ -64,7 +66,7 @@ def main():
         work = Path(temp)
         obj = work / "data.o"
         output = work / "image.out"
-        dump = work / "reassign.dump"
+        dump = Path(str(output) + ".reassign.csv")
         source = inputs / "data.c"
         linker_script = inputs / "script.t"
 
@@ -80,7 +82,7 @@ def main():
                   "    Name: ReassignSectionAddresses\n"
                   "    Library: ReassignSectionAddresses\n"
                   "    Options: section=.reassign_a:hash=sequential:"
-                  "start=0x100:dump={}\n").format(dump)
+                  "start=0x100:output=csv:debug=yes\n")
         config_path = work / "plugins.yaml"
         config_path.write_text(config)
         link_command = [args.target_ld]
@@ -90,12 +92,49 @@ def main():
                          "--trace=plugin"]
         log = run(link_command, env, work)
 
-        dump_lines = dump.read_text().splitlines()
-        if not any(line.startswith("00000100:same") for line in dump_lines):
+        with dump.open(newline="") as stream:
+            dump_rows = list(csv.reader(stream))
+        if dump_rows != [["section", "address", "string"],
+                         [".reassign_a", "0x00000100", "same"],
+                         [".reassign_a", "0x00000101", "other"]]:
             raise RuntimeError("ReassignSectionAddresses dump lacked expected symbol:\n" +
-                               "\n".join(dump_lines))
+                               repr(dump_rows))
+        debug_path = Path(str(output) + ".reassign.debug.json")
+        debug = json.loads(debug_path.read_text())
+        if (debug["schema_version"] != 3 or len(debug["sections"]) != 1 or
+                debug["sections"][0]["section"] != ".reassign_a" or
+                len(debug["sections"][0]["symbols"]) != 3):
+            raise RuntimeError("ReassignSectionAddresses debug symbols missing:\n" +
+                               repr(debug))
         if "ReassignSectionAddresses" not in log:
             raise RuntimeError("ReassignSectionAddresses trace was not observed:\n" + log)
+
+        # Exercise both mapping formats against the same compiled input.
+        config_path.write_text(config.replace("output=csv", "output=json"))
+        run(link_command, env, work)
+        mapping_path = Path(str(output) + ".reassign.json")
+        mapping = json.loads(mapping_path.read_text())
+        expected = {"schema_version": 1, "plugin": "ReassignSectionAddresses",
+                    "output_file": str(output), "sections": [
+                        {"section": ".reassign_a", "entries": [
+                            {"address": 256, "string": "same"},
+                            {"address": 257, "string": "other"}]}]}
+        if mapping != expected:
+            raise RuntimeError("ReassignSectionAddresses JSON mapping mismatch:\n" +
+                               repr(mapping))
+
+        # Both formats with a custom suffix; gzip also applies to debug JSON.
+        config_path.write_text(config.replace("output=csv",
+                                              "output=csv,json:gzip=yes:"
+                                              "suffix=custom-map"))
+        run(link_command, env, work)
+        for path in (dump, mapping_path, debug_path):
+            custom = Path(str(path).replace(".reassign.", ".custom-map."))
+            if custom.exists():
+                raise RuntimeError("Unexpected uncompressed output: " + str(custom))
+            compressed = gzip.decompress(Path(str(custom) + ".gz").read_bytes())
+            if compressed != path.read_bytes():
+                raise RuntimeError("Compressed output mismatch: " + str(path))
 
 
 if __name__ == "__main__":

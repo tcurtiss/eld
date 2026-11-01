@@ -1,0 +1,5 @@
+# REQUIRES: hexagon, llvm-readelf
+# Check compiler-generated pointer initializers, including interior offsets,
+# after actual DSECT reassignment and simulated rebasing of shared/PIE images.
+RUN: %python %p/Inputs/check_dynamic_pointers.py --compiler %clang --compiler-flags="%clangopts" --language c --link %link --readelf %readelf --work %t.c
+RUN: %python %p/Inputs/check_dynamic_pointers.py --compiler %clangxx --compiler-flags="%clangxxopts" --language c++ --link %link --readelf %readelf --work %t.cxx

@@ -1,0 +1,19 @@
+# REQUIRES: llvm-readelf
+# Preserve tab runs and leading/internal spaces. Remove CR/LF and other
+# invalid bytes, then trim trailing whitespace in both mapping formats.
+# Cleaning never alters IDs, raw debug bytes or metadata.
+RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
+RUN: sed 's/section=.reassign_a,.reassign_b/section=.reassign_trim/;s/output=csv/output=csv,json/' %p/Inputs/PluginConfigSequential.yaml > %t.raw.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.raw.out --plugin-config %t.raw.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.raw.out --format csv --sections .reassign_trim
+RUN: %python %p/Inputs/check_mapping_output.py %t.raw.out --format json --sections .reassign_trim
+RUN: sed 's/output=csv,json/output=csv,json:clean_strings=yes:debug=yes/' %t.raw.yaml > %t.clean.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.clean.out --plugin-config %t.clean.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.clean.out --format csv --clean --sections .reassign_trim
+RUN: %python %p/Inputs/check_mapping_output.py %t.clean.out --format json --clean --sections .reassign_trim
+RUN: %python %p/Inputs/check_section_outputs.py %t.clean.out reassign_trim
+RUN: sed 's/:debug=yes/:debug=yes:gzip=yes/' %t.clean.yaml > %t.gzip.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.gzip.out --plugin-config %t.gzip.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.gzip.out --format csv --clean --gzip --sections .reassign_trim
+RUN: %python %p/Inputs/check_mapping_output.py %t.gzip.out --format json --clean --gzip --sections .reassign_trim
+RUN: %python %p/Inputs/check_section_outputs.py %t.gzip.out reassign_trim --gzip

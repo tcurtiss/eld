@@ -5,37 +5,61 @@ assigns an absolute address to every object symbol in selected output
 sections. It is intended for bookkeeping sections such as `DSECT`, `COPY`,
 `INFO`, or `OVERLAY`; the assigned range is not loaded as ordinary image data.
 
-The plugin runs after layout, when output sections and symbol contents are
-known. It must not be used for relaxable code that expects the symbols to keep
-their pre-assignment addresses.
+Address assignment runs after layout, when output sections and symbol contents
+are known. On Hexagon, relocation callbacks first identify and claim references
+to selected strings, before ELD allocates GOT entries or dynamic relocations.
 
 ## References to assigned IDs on Hexagon
 
-When code passes a string's assigned address as an ID, compile its translation
-unit with `-Wa,--reloc-section-sym=none`. This preserves relocation references
-to the actual local string symbols instead of substituting section symbols
-plus offsets. For example, a function-local `static const char fmt[]` in
-`.dedup` can be used in either C or C++ without an assembly macro. Its bytes
-must not be dereferenced at the assigned address.
+When code passes a string's assigned address as an ID, a function-local
+`static const char fmt[]` in `.dedup` can be used in either C or C++ without an
+assembly macro. Its bytes must not be dereferenced at the assigned address.
+`-Wa,--reloc-section-sym=none` is no longer required: the plugin records original
+object-symbol extents and resolves section-symbol-plus-offset references to
+their containing string. Ordinary, non-mergeable named arrays with nonzero ELF
+symbol sizes are required for this attribution; stripping the input symbol
+table prevents it. The preservation flag remains supported when desired.
+Select output sections through explicit linker-script rules (as with `DSECT`),
+so their membership is known before relocation scanning. Late orphan-section
+assignment is diagnosed if the original symbols could not be indexed.
+For section-relative references, the offset must lie inside a sized object.
+Preserve named-symbol references when one-past or otherwise out-of-object
+offsets are intentional: a section offset alone cannot distinguish such an
+expression from a reference to an adjacent object.
 
 For shared-library code, retain `-fpic` or `-fPIC`. PIE executables can use
-`-fpie` or `-fPIE` and link with `--pie`. ELD recognizes the immediate-extender
-plus `Rd = add(pc, ...)` sequence referencing a non-preemptible symbol made
-absolute by the plugin and rewrites it to `Rd = ##assigned_value`. The two-word
-sequence remains eight bytes, with no additional GOT entry, runtime relocation,
+`-fpie` or `-fPIE` and link with `--pie`. The plugin recognizes the
+immediate-extender plus `Rd = add(pc, ...)` sequence referencing a non-preemptible
+selected symbol and rewrites it to `Rd = ##assigned_value`. The two-word sequence
+remains eight bytes, with no additional GOT entry, runtime relocation,
 or memory load. Genuine symbol offsets are preserved. This prevents the
 library's load bias from being added to the ID. No additional plugin option is
 needed; the same rewrite also works in fixed-address executables.
 
-This requires an ELD build containing the Hexagon absolute-address rewrite;
-the presence of `setSymbolAddress` alone in an older package is not sufficient.
-The Hexagon lit tests check actual C/C++ instructions and retained
-relocations, including parallel and serial linking. The rewrite is deliberately
-narrow: it does not recover symbols from section-relative references in old
-archives, rewrite GOT-based addressing, fix dynamic pointer-table relocations,
-or change preemptible symbol references. Malformed candidate relocation pairs
-are diagnosed instead of being partially rewritten. Other targets retain their
-existing relocation behavior.
+The same mechanism converts supported `immext + memw(...@GOT)` address loads
+to immediate transfers, avoiding the selected string's GOT slot. `R_HEX_32`
+pointer initializers receive the assigned value plus their genuine interior
+offset directly, with no dynamic relocation or load-bias adjustment. A global,
+default-visible array of such pointers keeps its own GOT references and
+interposition behavior; its entries do not require GOT slots for the strings.
+Unrelated GOT entries and dynamic relocations are unchanged.
+
+This requires the public `LinkerWrapper::claimUse`, `isSymbolPreemptible`, and
+`setSymbolAddress` APIs in both the build SDK and the runtime ELD package.
+`claimUse` is generic; section selection, symbol attribution, instruction
+validation and byte encoding reside in this plugin. Claimed operands are omitted
+from `--emit-relocs`, because their final bytes no longer need relocation.
+GC dependencies are preserved and debug relocations are not claimed.
+
+Supported instruction forms include extended transfers, immediate stores,
+`combine` with an extended first immediate, register/immediate `combine`, and
+upper-half duplex transfers, as well as the PC/GOT forms above. Unsupported
+selected-target relocations, malformed or overlapping pairs, ambiguous symbol
+extents, missing symbols, and address-plus-offset overflow are errors rather
+than silently incorrect IDs. Selected strings must be non-interposable (local,
+hidden, protected, or otherwise locally bound). Partial links do not perform
+this reference rewrite; apply the plugin at the final link. Other targets retain
+their existing relocation behavior. This does not dereference or execute IDs.
 
 ## Options
 
@@ -46,11 +70,12 @@ than one value, its value list remains comma-delimited:
 | --- | --- | --- |
 | `section=<name>[,<name>...]` | required | Output sections to process. |
 | `hash=md5\|sha1\|sequential` | `md5` | Address assignment mode. |
-| `start=<value>` | `0` | Starting address for `hash=sequential`; accepts C integer syntax. |
-| `dump=<path>[,<path>...]` | unset | Optional text dump, one path per target section. |
-| `gzip=yes\|no` | `no` | Writes dump files as `<path>.gz` and does not create the uncompressed file. |
-| `debug_dump=yes\|no` | `no` | Writes an uncompressed parallel `<path>_debug<ext>` dump with each symbol's assigned/original address, name, and raw bytes. Requires `dump=`. |
-| `clean_strings=yes\|no` | `no` | In the main dump only, retains printable ASCII, removes CR/LF, and converts each run of tabs to one space. |
+| `start=<value>` | `0` | Starting address for `hash=sequential`; accepts a complete unsigned 32-bit decimal, hexadecimal, or octal integer. |
+| `output=csv\|json[,csv\|json...]` or `output=none` | `none` | Selects one or both mapping formats, e.g. `output=csv,json`. Writes one `.<suffix>.csv` and/or `.<suffix>.json` per image containing all modified sections. `none` disables mapping output. |
+| `suffix=<name>` | `reassign` | Filename component used for every mapping/debug output: `<output-file>.<suffix>.csv`, `.json`, or `.debug.json`. |
+| `gzip=yes\|no` | `no` | Compresses every generated mapping and debug file and appends `.gz`; does not create the uncompressed files. |
+| `debug=yes\|no` | `no` | Writes one `<output-file>.<suffix>.debug.json`, grouping every modified symbol's assigned/original address, name, raw bytes, and relocation provenance by output section. Independent of mapping output and linker tracing; compressed when `gzip=yes`. |
+| `clean_strings=yes\|no` | `no` | In CSV/JSON mapping string fields only, retains printable ASCII and tabs, removes CR/LF and other control/non-ASCII bytes, and trims trailing whitespace. Tab runs are not collapsed. |
 
 Example plugin configuration:
 
@@ -59,7 +84,7 @@ GlobalPlugins:
   - Type: OutputSectionIteratorPlugin
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.dedup:hash=md5:dump=dedup.dump:gzip=no
+    Options: section=.dedup:hash=md5:output=csv,json:gzip=yes:debug=yes
 ```
 
 In sequential mode, identical symbol contents share one address across all
@@ -67,19 +92,198 @@ selected sections. In MD5 and SHA1 modes, the address is derived from the
 symbol bytes. The plugin still leaves the original bytes in the output; it
 does not physically merge sections or symbols.
 
-Dump lines have the form:
+Repeated `section=` keys append names in their first-seen order; duplicate names
+are processed once, and empty names are errors. Other repeated keys use their
+last value. Unknown hash names select MD5; unknown keys and malformed fields
+are ignored, with details printed when plugin tracing is enabled.
 
-```text
-<8-digit-lowercase-hex-address>:<symbol-content>
+MD5 and SHA1 hash the full symbol bytes, including a trailing NUL. Sequential
+deduplication omits one trailing NUL, as the mapping string does, and its 32-bit
+counter wraps after `0xffffffff`. Truncated 32-bit hashes can collide for
+different contents; no collision detection is performed. Mapping deduplication
+keeps the first string at each assigned address within each section, so hashes
+do not guarantee globally unique IDs. Sequential IDs are unique for distinct
+normalized contents until the counter wraps.
+
+### Combined CSV and JSON mappings
+
+All output paths retain the full linker output filename, including its
+extension. `suffix=reassign` is the default. Set, for example,
+`suffix=string_ids` to produce `image.so.string_ids.csv`,
+`image.so.string_ids.json`, and `image.so.string_ids.debug.json` when enabled.
+`gzip=yes` appends `.gz` to each. The suffix must be nonempty and contain no
+path separators or control bytes; it changes filenames only, not file contents.
+Repeated `suffix=` keys use the last value.
+
+`output=csv` writes one `image.so.reassign.csv` beside linker output
+`image.so`, containing all modified sections. The first column is the original
+output section name (including a leading dot, if present). CSV includes a
+header, CRLF record endings, and addresses formatted as `0xXXXXXXXX` (eight
+zero-padded uppercase hexadecimal digits). Section and string fields are quoted;
+embedded double quotes are doubled, and commas, CR/LF, and other bytes are
+preserved unless string cleaning is enabled. One trailing NUL is omitted from
+each mapping string.
+
+```csv
+section,address,string
+".dedup",0x00000100,"format string"
+".other_strings",0x00000101,"a comma, and ""quotes"""
 ```
 
-Duplicate addresses are written once per dump. Set `debug_dump=yes` to also
-write a parallel debug dump with every symbol, its original address, and raw
-bytes; linker tracing is not required.
+`output=json` writes one `image.so.reassign.json`. The version-1 object
+contains `schema_version`, `plugin`, `output_file`, and a `sections` array.
+Each section has its original `section` name and an `entries` array containing
+the same address/string pairs as CSV. JSON addresses are decimal numbers,
+not strings:
 
-Set `clean_strings=yes` when dump content may contain terminal control
-characters or non-ASCII bytes. It affects only the human-readable main dump;
-the debug dump continues to record the original bytes as hexadecimal.
+```json
+{
+  "schema_version": 1,
+  "plugin": "ReassignSectionAddresses",
+  "output_file": "image.so",
+  "sections": [
+    {
+      "section": ".dedup",
+      "entries": [{"address": 256, "string": "format string"}]
+    }
+  ]
+}
+```
+
+Both formats follow configured section order and symbol assignment order.
+Duplicate addresses are written once **within each section**; a shared address
+in two sections appears in both sections' mappings. Absent sections and sections
+with no modified object symbols are omitted. No mapping file is created when
+there are no modified symbols. `output=none` (the default) disables mapping
+output without disabling address assignment or detailed debug JSON.
+
+Use `output=csv,json` (or `output=json,csv`) to generate both mappings in the
+same link. Duplicate formats are ignored. `none` must appear alone; unknown
+formats and empty list items are errors. Repeated `output=` keys replace the
+previous selection, as with other non-list options.
+
+`gzip=yes` applies to **every generated file**, including debug JSON. For
+`output=csv,json:debug=yes:gzip=yes`, the files are:
+
+- `image.so.reassign.csv.gz`
+- `image.so.reassign.json.gz`
+- `image.so.reassign.debug.json.gz`
+
+Gzip does not create uncompressed files or remove existing ones. Both mappings
+are emitted from the same assignment pass. Mapping entries and debug JSON are
+streamed; each compressed file uses a fixed-size 64 KiB output buffer rather
+than buffering the entire document.
+
+Set `clean_strings=yes` when mapping content may contain terminal control
+characters or non-ASCII bytes. Leading/internal spaces and tabs are preserved
+exactly, including tab runs. CR/LF and other non-printable bytes (except tabs)
+are removed; trailing spaces and tabs are trimmed, including those preceding
+removed bytes. For example, `"\tA\t\tB \t\r\n"` becomes `"\tA\t\tB"`.
+This affects CSV/JSON mapping strings only: address assignment and detailed
+debug JSON continue to use original bytes.
+Without cleaning, CSV may contain non-text bytes; read it using a byte-preserving
+encoding. JSON escapes controls and non-ASCII bytes as `\u00XX`, mapping each
+byte to U+0000–U+00FF rather than assuming UTF-8. Encoding a decoded JSON string
+as Latin-1 recovers the same bytes as the CSV field. Section names are never
+cleaned.
+
+### Combined symbol and relocation debug JSON
+
+Set `debug=yes` to inspect every modified symbol and the work performed on
+its plugin-owned relocations, even when `output=none`:
+
+```yaml
+    Options: section=.dedup:hash=md5:debug=yes
+```
+
+For output `image.so`, this writes one `image.so.reassign.debug.json`
+containing all modified sections (or `.reassign.debug.json.gz` with
+`gzip=yes`). The version-3 JSON object contains `schema_version`, `plugin`,
+`output_file`, and
+a `sections` array. Each section entry has its original `section` name and
+a `symbols` array. Section names are preserved exactly, without filename
+normalization; names such as `.dedup` and `dedup` remain distinct. Sections
+without modified symbols are omitted, and no debug file is created if no
+symbols were modified.
+
+Each symbol has `symbol`, `input_file`,
+`input_section`, `assigned_address`, `original_address`, `raw_bytes`, and
+`relocations`. Raw bytes are hexadecimal and include any trailing NUL;
+original addresses are captured before reassignment. All modified symbols are
+included, including duplicate-content symbols and symbols whose relocation
+arrays are empty. Same-named local symbols from different inputs are kept
+separate. Section entries follow the configured section order.
+
+Each nested relocation array contains one record per claimed use associated
+with that symbol (both halves of an immediate-extender pair have separate
+records). Each record contains:
+
+- `source`: input file/section, chunk-relative byte offset, final source
+  address, and output section.
+- `original`: compiler relocation type/name, symbol, signed addend, and
+  original four-byte operand data.
+- `target`: original input file/section and output section, resolved object
+  symbol, signed interior offset, and assigned absolute address.
+- `transformation`: `pc-relative-to-absolute`, `got-load-to-absolute`,
+  `absolute-immediate-update`, or `absolute-pointer-initializer`.
+- `value`: assigned address plus the interior offset; `replacement_data`:
+  the encoded four-byte operand supplied to ELD.
+
+Numeric fields are JSON integers; offsets are bytes and operand data is decoded
+little-endian. Symbols follow assignment order, and each symbol's relocation
+records are sorted deterministically across serial/parallel linking. Debug
+JSON replaces neither the ELF relocation table nor the CSV; it documents why
+the consumed uses are absent from `--emit-relocs`.
+Unchanged relocations and debug-information relocations are not included.
+
+Mapping and debug outputs default to off and leave existing artifacts untouched
+when disabled. Absent sections or sections with no modified object symbols produce
+no artifacts. With `debug=yes`, files are replaced after address assignment
+and reference encoding. Failure to open/write/close any enabled artifact fails
+the link. A later link failure can leave diagnostic artifacts, so their
+presence alone does not prove that ELF output completed successfully.
+
+## Threading and memory usage
+
+The plugin honors ELD's thread count; `--no-threads` keeps plugin work serial.
+Assignment snapshots scan each relevant input's symbol table once and preserve
+section/rule/chunk order and local-before-global symbol order. Symbol address
+changes and replacement-data submission remain serial because the ELD layout
+operations they record are not thread-safe.
+
+MD5/SHA1 process borrowed input blocks with a fixed 128-byte padding buffer,
+without allocating or copying a symbol's contents. Sequential deduplication
+also borrows content keys. Hash jobs share one lazily created pool at ELD's
+configured capacity. Work is batched (up to 32 symbols per claim); fewer than
+256 symbols totaling less than 64 KiB are hashed serially to avoid scheduling
+overhead. These are conservative thresholds, not a guarantee of speedup for
+every image or host.
+
+Relocation callbacks discard non-runtime sources and unselected targets before
+initializing the immutable target index. Source-use caches initialize once per
+chunk without holding the global cache lock during enumeration. A separate
+short lock protects collected records. `claimUse()` remains in the original
+callback, as required by ELD's callback ownership checks.
+
+After assignments and reference encoding, enabled CSV, JSON and debug files
+can be rendered/compressed concurrently, with exactly one writer per file.
+Writers consume frozen metadata and borrowed symbol bytes, not mutable linker
+state. Memory scales with compact per-symbol/per-relocation indices and mapping
+entries, rather than rendered file sizes; metadata shared across debug records
+is snapshotted once per chunk/symbol/type. Each gzip writer has a fixed 64 KiB
+buffer. Raw debug bytes are streamed as hex without an intermediate full-size
+hex string. All writers finish before errors are reported in deterministic
+format-list order. File content and address assignment order are unchanged by
+thread count.
+
+`ReassignHashBoundaries.test` checks binary contents, an empty symbol, MD5/SHA1
+padding boundaries and large symbols against Python's hashes.
+Binary CSV checks compare exact encoded records rather than using
+`csv.reader`, so embedded NUL bytes remain covered on Python 3.10 and older.
+`ReassignThreading.test` uses 16 independent inputs, repeated local names,
+1,024 selected symbols, selected and unrelated relocations, and two sections.
+It compares serial and 1/2/4/8-thread images, CSV/JSON/debug contents, and gzip
+output for all three hash modes, and checks replacement bytes in the ELF.
 
 ## Build as part of ELD
 
@@ -123,7 +327,7 @@ from `0xffffffff` to zero. The source fixtures exercise:
 
 The checker reads the original object symbols and bytes, independently checks
 hash values, and locates every address operand using the input relocations.
-It checks linked immediate values, static retained relocation types/addends,
+It checks linked immediate values, omission of claimed relocation records,
 unchanged function sizes, and byte-identical serial/parallel images. A normal
 non-DSECT string is a negative control. DSECT sections must be non-allocated
 and outside every `PT_LOAD` file range, with no dynamic relocations in these
@@ -134,9 +338,9 @@ The fixtures also check `__PIC__`/`__PIE__` at compile time to verify the
 requested small/large model. PIE output must have `ET_DYN`, `DF_1_PIE`, a
 dynamic segment, and the requested entry point; shared libraries must not
 have `DF_1_PIE`. Merely linking PIC objects into a fixed-address executable
-does not count as PIE coverage. ELD does not retain static relocations for
-shared libraries or PIEs, so the checker locates their instruction operands
-from the original input relocations instead.
+does not count as PIE coverage. Claimed operands are absent from
+`--emit-relocs`, so the checker locates their instruction operands from the
+original input relocations for every output mode.
 
 These tests require Hexagon, `llvm-readelf` with JSON output, `llvm-objdump`,
 and an ELD build containing the rewrite. They run through the same lit
@@ -175,20 +379,16 @@ Archive cases require `llvm-ar`; the external-assembler LTO case requires
 The tests can use the 23.0.01 package's compiler, archiver, assembler, and
 ELF inspection tools, but the ELD linker must include the new rewrite.
 
-For LTO, preserving symbols when compiling bitcode is **not sufficient**.
-Pass the preservation option to ELD's native code-generation stage too:
-
-```sh
-ld.eld --shared first.bc second.bc \
-  --flto-options=codegen=-reloc-section-sym=none \
-  -T layout.t --plugin-config plugins.yaml -o image.so
-```
-
-If using the external LTO assembler, also supply
-`--flto-options=asmopts=--reloc-section-sym=none`. The negative-control tests
-confirm that omitting the LTO code-generation setting, or using an old archive
-member compiled without symbol preservation, leaves section-relative address
-computations unrepaired. Those are not successful ID-materialization cases.
+Old archive members and LTO-generated native objects are supported without
+the preservation flag, provided their object-symbol extents remain available.
+Tests cover both the default section-relative mode and explicit preservation
+in native/LTO assembly. `ReassignReferenceRewrite.test` additionally checks
+GOT-slot elimination, preservation of a public pointer array's GOT entry and
+unrelated dynamic relocations, section-offset attribution, and malformed inputs.
+It also validates populated provenance against original object relocations
+and final image bytes, JSON escaping, serial/parallel determinism, and error
+paths. `ReassignSectionOutputs.test` checks option gating, combined symbol
+debug output, and empty relocation arrays on every supported architecture.
 
 Two separate tests, `ReassignMergeStringContents.test` and
 `ReassignNoMergeStringContents.test`, are marked expected failures. They expose
@@ -202,8 +402,10 @@ fixed; they do not bless the incorrect IDs as supported behavior.
 
 ## Build standalone against an installed ELD package
 
-The installed public API must provide `LinkerWrapper::setSymbolAddress`.
-CMake reports an error when the selected package lacks that API.
+The installed public API must provide `LinkerWrapper::setSymbolAddress`,
+`claimUse`, and `isSymbolPreemptible`. CMake reports an error when the selected
+package lacks the required APIs. Updating headers alone is insufficient: the
+ELD runtime must provide their implementations too.
 
 Use the top-level Plugins directory, which can be copied outside the ELD
 and LLVM source trees. A compatible host C++ compiler, the ELD public
@@ -272,8 +474,8 @@ must be in ELD_LLVM_TOOLS_DIR (default: beside the runner). LLVM libraries
 default to the sibling lib directory; ELD_LLVM_LIBS_DIR overrides that path.
 The general lit test requires llvm-readelf. Hexagon address tests additionally
 require llvm-objdump; lit marks tests with missing tools unsupported.
-The Hexagon address tests also require ELD's plugin-assigned absolute-address
-rewrite support; older linkers can pass the smoke test but fail these fixtures.
+The Hexagon address tests also require the plugin-owned relocation APIs in ELD;
+an older package cannot build or load this plugin without those APIs.
 Python-driven matrix fixtures currently do not support embedded double quotes
 in extra compiler flags. Use simple flags such as `-G0` for the full matrix;
 the smoke test and direct compiler RUN lines preserve quoted arguments.
@@ -290,6 +492,7 @@ Unix. Direct smoke runs accept repeatable `--target-cxx-arg=...` and
 [framework test documentation](../README.md#standalone-tests) for JSON argument
 arrays in direct lit invocations and platform validation limits.
 
-When loading the plugin manually, include its output directory and the ELD
-runtime library directory in LD_LIBRARY_PATH on Linux, DYLD_LIBRARY_PATH
-on macOS, or PATH on Windows. CTest arranges these paths automatically.
+When loading the plugin manually, pass `-L/path/to/plugin-directory` to ELD
+to locate the plugin. Include the ELD runtime library directory in
+LD_LIBRARY_PATH on Linux, DYLD_LIBRARY_PATH on macOS, or PATH on Windows.
+CTest arranges the plugin search and runtime library paths automatically.
