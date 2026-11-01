@@ -539,10 +539,14 @@ public:
   bool makeChunkWritable(eld::Fragment *F);
 
   // ------------------- Relocation data set by plugins ---------------------
-  void setRelocationData(const eld::Relocation *, uint64_t,
-                         plugin::LinkerWrapper *);
+  eld::Expected<void> setRelocationData(const eld::Relocation *, uint64_t,
+                                        plugin::LinkerWrapper *);
   bool getRelocationData(const eld::Relocation *, uint64_t &);
   bool getRelocationDataForSync(const eld::Relocation *, uint64_t &);
+  eld::Expected<void> claimRelocation(eld::Relocation *,
+                                      const plugin::LinkerWrapper *);
+  void closePluginRelocationClaims();
+  bool validatePluginRelocations();
 
   void addReferencedSymbol(Section &, ResolveInfo &);
 
@@ -723,7 +727,17 @@ private:
   // ----------------- Use/Def support for linker script --------------
   std::unordered_set<std::string> VisitedAssignments;
   // ----------------- Relocation Data set by plugins ------------------
-  std::unordered_map<const eld::Relocation *, uint64_t> RelocationData;
+  struct RelocationDataEntry {
+    const plugin::LinkerWrapper *Owner;
+    // A claim records ownership before replacement data is available.
+    std::optional<uint64_t> Data;
+  };
+  std::unordered_map<const eld::Relocation *, RelocationDataEntry>
+      RelocationData;
+  bool PluginRelocationClaimsClosed = false;
+  bool PluginRelocationDataClosed = false;
+  const char *PluginRelocationClaimError = nullptr;
+  const char *PluginRelocationDataError = nullptr;
   // ----------------- Section references set by plugins --------------
   ReferencedSymbols BitcodeReferencedSymbols;
   // ----------------- Mutex guard -----------------------------------
