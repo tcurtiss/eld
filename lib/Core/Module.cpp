@@ -817,9 +817,16 @@ uint64_t Module::getImageLayoutChecksum() const {
   return Hash;
 }
 
-void Module::setRelocationData(const eld::Relocation *R, uint64_t Data) {
+bool Module::setRelocationData(const eld::Relocation *R, uint64_t Data,
+                               const plugin::LinkerWrapper *Owner) {
   std::lock_guard<std::mutex> Guard(Mutex);
+  // Serialize the ownership check with both claims and data insertion. A
+  // concurrent claim must not let another plugin supply the winning value.
+  auto It = PluginRelocations.find(R);
+  if (It != PluginRelocations.end() && It->second != Owner)
+    return false;
   RelocationData.insert({R, Data});
+  return true;
 }
 
 bool Module::getRelocationData(const eld::Relocation *R, uint64_t &Data) {
@@ -834,6 +841,39 @@ bool Module::getRelocationDataForSync(const eld::Relocation *R,
     return false;
   Data = It->second;
   return true;
+}
+
+bool Module::claimRelocation(eld::Relocation *R,
+                             const plugin::LinkerWrapper *Owner) {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  if (RelocationData.count(R) ||
+      !PluginRelocations.try_emplace(R, Owner).second)
+    return false;
+  R->setPluginOwned();
+  return true;
+}
+
+bool Module::validatePluginRelocations() {
+  bool Valid = true;
+  for (const auto &Entry : PluginRelocations) {
+    const Relocation *R = Entry.first;
+    const ELFSection *S = R->targetRef()->frag()->getOwningSection();
+    if (S->isIgnore() || S->isDiscard() ||
+        (S->getOutputSection() && S->getOutputSection()->isDiscard()))
+      continue;
+    if (R->targetRef()->getOutputELFSection()->isNoBits()) {
+      getConfig().raise(Diag::error_plugin_owned_use)
+          << ("source has no output file storage: " +
+              R->getSourcePath(getConfig().options()));
+      Valid = false;
+    } else if (!RelocationData.count(R)) {
+      getConfig().raise(Diag::error_plugin_owned_use_missing_data)
+          << R->getSourcePath(getConfig().options())
+          << llvm::utohexstr(R->targetRef()->offset());
+      Valid = false;
+    }
+  }
+  return Valid;
 }
 
 void Module::addReferencedSymbol(Section &RefencingSection,

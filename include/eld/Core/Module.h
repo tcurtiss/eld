@@ -537,9 +537,12 @@ public:
   bool makeChunkWritable(eld::Fragment *F);
 
   // ------------------- Relocation data set by plugins ---------------------
-  void setRelocationData(const eld::Relocation *, uint64_t);
+  bool setRelocationData(const eld::Relocation *, uint64_t,
+                         const plugin::LinkerWrapper *);
   bool getRelocationData(const eld::Relocation *, uint64_t &);
   bool getRelocationDataForSync(const eld::Relocation *, uint64_t &);
+  bool claimRelocation(eld::Relocation *, const plugin::LinkerWrapper *);
+  bool validatePluginRelocations();
 
   void addReferencedSymbol(Section &, ResolveInfo &);
 
@@ -708,6 +711,8 @@ private:
   std::unordered_set<std::string> VisitedAssignments;
   // ----------------- Relocation Data set by plugins ------------------
   std::unordered_map<const eld::Relocation *, uint64_t> RelocationData;
+  llvm::DenseMap<const eld::Relocation *, const plugin::LinkerWrapper *>
+      PluginRelocations;
   // ----------------- Section references set by plugins --------------
   ReferencedSymbols BitcodeReferencedSymbols;
   // ----------------- Mutex guard -----------------------------------

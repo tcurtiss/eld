@@ -12,6 +12,61 @@ Plugins interacts with the linker using LinkerWrapper.
 .. doxygenclass:: eld::plugin::LinkerWrapper
    :members:
 
+Plugin-owned relocations
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+``LinkerWrapper::claimUse(Use U)`` lets a plugin take responsibility for the
+final bytes at one relocation site. This is useful when a plugin replaces an
+address calculation or stored pointer with an absolute value: normal scanning
+could otherwise allocate a GOT or PLT slot or a dynamic relocation that would
+change the replacement at runtime.
+
+Register the relevant relocation types with ``registerReloc`` in
+``LinkerPluginConfig::Init``. Inspect each ``Use`` in ``RelocCallBack`` and call
+``claimUse`` for the current ``Use`` on that callback's thread. A saved ``Use``
+cannot be claimed later or from a worker thread. Callbacks may run concurrently,
+so synchronize any plugin containers used to collect claimed uses.
+
+Claims are supported during final links for executables, shared libraries,
+and PIEs. The source must have a complete relocation storage field with a
+nonzero width of at most eight bytes in a PROGBITS chunk. Partial links,
+duplicate claims (including a second claim by the same plugin), and claims for
+uses with an existing replacement from ``setTargetDataForUse`` are rejected.
+Check each API result and report errors through the plugin diagnostic framework.
+
+For each claimed use that survives into the output, the owning plugin must
+supply final bytes with ``setTargetDataForUse`` before relocation application.
+For an output-section iterator this can be done in its ``AfterLayout`` run,
+when final addresses are available. The first accepted replacement is retained;
+later calls do not overwrite it, and another plugin cannot supply the replacement
+for a claimed use. Replacement calls are thread-safe, but finish all worker tasks
+before returning from the plugin hook. Missing replacement data and
+NOLOAD/NOBITS output storage are diagnosed before relocation application.
+
+ELD skips normal target scanning and application for claimed uses. Those uses
+do not reserve GOT/PLT entries or dynamic relocations and are omitted from
+``--emit-relocs``. Other references to the same symbol retain normal processing
+and may still allocate those entries. Existing garbage-collection dependencies
+and the use's symbol, type, and addend are retained. Hexagon also skips trampoline
+creation and tail-jump deletion for claimed branches. The plugin must validate
+the instruction sequence, encode complete instruction or data bytes within the
+original storage width, and handle any other target relaxation that affects its
+rewrite. Claiming does not validate the semantic correctness of those bytes.
+
+``setTargetDataForUse`` alone replaces final storage bytes but does not suppress
+normal scanning or runtime relocation allocation. ``setSymbolAddress`` changes
+the symbol to an absolute value but does not claim its references. A plugin must
+identify the references it intends to rewrite, including references expressed
+as a section symbol plus an addend, and claim each relevant use explicitly.
+
+``LinkerWrapper::isSymbolPreemptible(Symbol S)`` queries the target backend's
+interposition rules for the current symbol and link configuration. It accounts
+for binding, visibility, output type, symbol versioning, and ``-Bsymbolic`` /
+``-Bsymbolic-functions``. The query does not change symbol binding or visibility;
+a null symbol conservatively returns ``true``. Before replacing a reference
+with a fixed value, a plugin must decide whether doing so preserves required
+runtime interposition.
+
 Plugin Abstract Data Types
 -----------------------------
 

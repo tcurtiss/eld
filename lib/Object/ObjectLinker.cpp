@@ -2127,6 +2127,8 @@ void ObjectLinker::scanRelocationsHelper(InputFile *Input, bool IsPartialLink,
         for (auto &P : PVect)
           P->callReloc(Relocation->type(), Relocation);
       }
+      if (Relocation->isPluginOwned())
+        continue;
       ELFSection *RelocSection = Rs;
       // scan relocation
       if (!IsPartialLink)
@@ -2483,7 +2485,7 @@ bool ObjectLinker::relocation(bool EmitRelocs) {
       };
       for (auto &Relocation : Rs->getLink()->getRelocations()) {
         if (ProcessReloc(Relocation)) {
-          if (EmitRelocs)
+          if (EmitRelocs && !Relocation->isPluginOwned())
             EmitOneReloc(Relocation);
           Relocation->apply(*getTargetBackend().getRelocator());
         }
