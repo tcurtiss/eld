@@ -47,7 +47,7 @@ for mode, flags in (
         obj = work / (flag[1:] + ".o")
         run([args.compiler, *shlex.split(args.compiler_flags), "-O2", flag,
              "-G0", "-ffunction-sections", "-fdata-sections",
-             "-Wa,--reloc-section-sym=none", "-c", source, "-o", obj], work)
+             "-c", source, "-o", obj], work)
         original = inspect(args, obj)
         original_sections = sections(original)
         original_symbols = {s["Name"]["Name"]: s for s in symbols(original)}
@@ -61,9 +61,20 @@ for mode, flags in (
                 r = item["Relocation"]
                 if pointer["Value"] <= r["Offset"] < pointer["Value"] + pointer["Size"]:
                     assert r["Type"]["Name"] == "R_HEX_32", r
-                    assert original_symbols[r["Symbol"]["Name"]]["Section"]["Name"] == ".dedup", r
+                    target = symbols(original)[r["Symbol"]["Value"]]
+                    assert target["Section"]["Name"] == ".dedup", r
+                    name, addend = r["Symbol"]["Name"], r["Addend"]
+                    if target["Type"]["Name"] == "Section":
+                        target_offset = target["Value"] + addend
+                        matches = [s for s in symbols(original)
+                                   if s["Type"]["Name"] == "Object" and
+                                   s["Section"]["Value"] == target["Section"]["Value"] and
+                                   s["Value"] <= target_offset < s["Value"] + s["Size"]]
+                        assert len(matches) == 1, (r, matches)
+                        name = matches[0]["Name"]["Name"]
+                        addend = target_offset - matches[0]["Value"]
                     refs.append((r["Offset"] - pointer["Value"],
-                                 r["Symbol"]["Name"], r["Addend"]))
+                                 name, addend))
         assert len(refs) == 4 and any(addend == 3 for _, _, addend in refs), refs
         image = work / (mode + "-" + flag[1:] + ".elf")
         # The C++ entry point is mangled; its name is derived from the object.

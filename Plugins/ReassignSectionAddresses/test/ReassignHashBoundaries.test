@@ -1,0 +1,3 @@
+# Verify exact portable hash IDs around padding/block boundaries, with binary
+# data, an empty symbol, and large symbols. Scheduling must not change output.
+RUN: %python %p/Inputs/check_threading.py --compiler %clang --compiler-flags="%clangopts" --link %link --work %t

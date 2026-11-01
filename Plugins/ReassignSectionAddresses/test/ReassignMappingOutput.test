@@ -1,0 +1,66 @@
+# REQUIRES: llvm-readelf
+# Both mapping formats contain the same deduplicated address/string records
+# for all modified sections, while retaining duplicates across sections.
+RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
+RUN: sed 's/section=.reassign_a,.reassign_b/section=.reassign_a,.reassign_b,.reassign_clean,.reassign_csv,.reassign_bytes,.reassign_empty,.missing/' %p/Inputs/PluginConfigSequential.yaml > %t.csv.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.csv.out --plugin-config %t.csv.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.csv.out --format csv --sections .reassign_a .reassign_b .reassign_clean .reassign_csv .reassign_bytes .reassign_empty .missing
+RUN: sed 's/output=csv/output=json/' %t.csv.yaml > %t.json.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.json.out --plugin-config %t.json.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.json.out --format json --sections .reassign_a .reassign_b .reassign_clean .reassign_csv .reassign_bytes .reassign_empty .missing
+RUN: test ! -e %t.json.out.reassign.csv
+RUN: test ! -e %t.csv.out.reassign.json
+# CSV uses 0xXXXXXXXX; JSON uses unsigned decimal integers, including zero
+# and the full 32-bit range. The same encoding is used with gzip enabled.
+RUN: sed 's/start=0x100/start=0/' %p/Inputs/PluginConfigSequential.yaml > %t.zero-csv.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.zero-csv.out --plugin-config %t.zero-csv.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.zero-csv.out --format csv --start 0 --sections .reassign_a .reassign_b
+RUN: sed 's/output=csv/output=json/' %t.zero-csv.yaml > %t.zero-json.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.zero-json.out --plugin-config %t.zero-json.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.zero-json.out --format json --start 0 --sections .reassign_a .reassign_b
+RUN: sed 's/start=0x100/start=0xfffffffd/' %p/Inputs/PluginConfigSequential.yaml > %t.high-csv.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.high-csv.out --plugin-config %t.high-csv.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.high-csv.out --format csv --start 0xfffffffd --sections .reassign_a .reassign_b
+RUN: sed 's/output=csv/output=json:gzip=yes/' %t.high-csv.yaml > %t.high-json.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.high-json.out --plugin-config %t.high-json.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.high-json.out --format json --gzip --start 0xfffffffd --sections .reassign_a .reassign_b
+# Output filenames retain their UTF-8 spelling in JSON metadata.
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.unicode-é.out --plugin-config %t.json.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.unicode-é.out --format json --sections .reassign_a .reassign_b .reassign_clean .reassign_csv .reassign_bytes .reassign_empty .missing
+# Mapping JSON is deterministic across serial and parallel linking.
+RUN: cp %t.json.out.reassign.json %t.parallel.json
+RUN: %link --no-threads %t.o -T %p/Inputs/script.t -e main -o %t.json.out --plugin-config %t.json.yaml
+RUN: cmp %t.parallel.json %t.json.out.reassign.json
+# Cleaning changes rendered strings, not addresses or raw debug data.
+RUN: sed 's/output=json/output=json:clean_strings=yes:debug=yes/' %t.json.yaml > %t.clean.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.clean.out --plugin-config %t.clean.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.clean.out --format json --clean --sections .reassign_a .reassign_b .reassign_clean .reassign_csv .reassign_bytes .reassign_empty .missing
+RUN: %python %p/Inputs/check_section_outputs.py %t.clean.out reassign_a reassign_b
+# Gzip applies to both mapping formats and detailed debug JSON.
+RUN: sed 's/output=json/output=json:gzip=yes:debug=yes/' %t.json.yaml > %t.gzip-json.yaml
+RUN: rm -f %t.gzip-json.out.reassign.debug.json
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.gzip-json.out --plugin-config %t.gzip-json.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.gzip-json.out --format json --gzip --sections .reassign_a .reassign_b .reassign_clean .reassign_csv .reassign_bytes .reassign_empty .missing
+RUN: %python %p/Inputs/check_section_outputs.py %t.gzip-json.out reassign_a reassign_b --gzip
+RUN: %python -c "import gzip,json; d=json.load(gzip.open('%t.gzip-json.out.reassign.debug.json.gz','rt')); assert [s['section'] for s in d['sections']]==['.reassign_a','.reassign_b','.reassign_clean','.reassign_csv','.reassign_bytes','.reassign_empty']; assert [len(s['symbols']) for s in d['sections']]==[3,2,1,1,1,2]"
+RUN: test ! -e %t.gzip-json.out.reassign.debug.json
+RUN: sed 's/output=csv/output=csv:gzip=yes/' %t.csv.yaml > %t.gzip-csv.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.gzip-csv.out --plugin-config %t.gzip-csv.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.gzip-csv.out --format csv --gzip --sections .reassign_a .reassign_b .reassign_clean .reassign_csv .reassign_bytes .reassign_empty .missing
+# Missing/empty sections don't produce an empty mapping artifact.
+RUN: sed 's/section=.reassign_a,.reassign_b,.reassign_clean,.reassign_csv,.reassign_bytes,.reassign_empty,.missing/section=.missing,.text/' %t.json.yaml > %t.empty.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.empty.out --plugin-config %t.empty.yaml
+RUN: test ! -e %t.empty.out.reassign.json
+# Existing mapping artifacts are untouched when output=none.
+RUN: cp %t.parallel.json %t.none.out.reassign.json
+RUN: sed 's/output=json/output=none:gzip=yes/' %t.json.yaml > %t.none.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.none.out --plugin-config %t.none.yaml
+RUN: cmp %t.parallel.json %t.none.out.reassign.json
+RUN: test ! -e %t.none.out.reassign.json.gz
+# JSON open/flush failures fail the link, just like CSV failures.
+RUN: mkdir -p %t.blocked.out.reassign.json
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.blocked.out --plugin-config %t.json.yaml 2>&1 | %filecheck %s
+RUN: mkdir -p %t.blocked-gzip.out.reassign.json.gz
+RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.blocked-gzip.out --plugin-config %t.gzip-json.yaml 2>&1 | %filecheck %s
+
+CHECK: failed to write mapping output

@@ -15,8 +15,7 @@ def compile_patterns(args, work, extra=(), mixed=False):
     inputs = Path(__file__).resolve().parent
     compiler = [args.compiler, *shlex.split(args.compiler_flags)]
     common = [*compiler, "-x", args.language, "-O2", "-fPIC",
-              "-ffunction-sections", "-fdata-sections",
-              "-Wa,--reloc-section-sym=none"]
+              "-ffunction-sections", "-fdata-sections"]
     if args.language == "c++":
         common += ["-std=gnu++17", "-fno-exceptions", "-fno-rtti"]
     objects = [work / "callers.o", work / "callees.o"]
@@ -178,7 +177,7 @@ def binding_case(args, work, case):
 
 
 def preservation_case(args, work, case):
-    """Negative controls: section-relative references are NOT repaired."""
+    """Section-relative references from old objects and LTO are repaired."""
     inputs = Path(__file__).resolve().parent
     compiler = [args.compiler, *shlex.split(args.compiler_flags), "-x", args.language,
                 "-O2", "-fPIC"]
@@ -196,24 +195,12 @@ def preservation_case(args, work, case):
         archive = work / "legacy.a"
         run([args.ar, "rcs", archive, objects[1]], work)
         objects = [objects[0], "--whole-archive", archive, "--no-whole-archive"]
-    image = work / "unsupported.elf"
+    image = work / "section-relative.elf"
     run([args.link, "--shared", *objects, "-T", inputs / "address_patterns.t",
          "--plugin-config", plugin_config(work), "-o", image], work)
-    # Do not use a broad expected-failure marker: assert the specific known
-    # limitation, and (for the mixed archive) prove the new object still works.
-    if case == "legacy-archive":
-        check_returns(args, image, {"test_a": b"alpha"})
-    target = "test_b" if case == "legacy-archive" else "test_a"
-    info = inspect(args, image)
-    sym = next(s for s in symbols(info) if s["Name"]["Name"] == target)
-    disassembly = run([args.objdump, "-d", image], work)
-    body = []
-    for line in disassembly.splitlines():
-        match = re.match(r"\s*([0-9a-f]+):\s+(.*)", line)
-        if match and sym["Value"] <= int(match[1], 16) < sym["Value"] + sym["Size"]:
-            body.append(match[2])
-    assert "add(pc," in "\n".join(body), (case, body)
-    print("Confirmed unsupported section-relative path:", case)
+    check_returns(args, image, {"test_a": b"alpha", "test_b": b"beta",
+                               "test_duplicate": b"alpha"})
+    print("Confirmed section-relative attribution:", case)
     return 1
 
 

@@ -19,14 +19,11 @@
 // a PT_LOAD segment. Target sections are given via the required "section="
 // option key (see Init() below for the full options string format).
 //
-// Optionally, the plugin can dump every assigned address alongside the
-// symbol's string content to a text file (one "<hex address>:<string>" pair
-// per line, one line per distinct address), for offline inspection of the
-// address/content mapping. The address is always printed as exactly 8
-// lowercase hex digits, zero-padded on the left (no leading-zero
-// suppression), regardless of its numeric magnitude. When more than one
-// target section is given, a separate dump file is written per section (see
-// the "dump" option below).
+// Optionally, the plugin writes an address/string mapping to one CSV or JSON
+// file per output image. CSV includes a section column; JSON groups entries
+// by section. CSV addresses use 0x followed by eight zero-padded uppercase
+// hexadecimal digits; JSON addresses are decimal numbers. Paths are derived
+// from the linker output filename.
 //
 // Symbols whose content is byte-identical automatically receive the same
 // address. In hash mode (md5/sha1) this falls out for free, since the
@@ -35,17 +32,19 @@
 // explicit content-to-address map so that repeated content reuses the
 // address assigned to its first occurrence rather than consuming a new
 // counter value, regardless of which target section either occurrence is
-// in. Such duplicates are written to a section's dump file only once
+// in. Such duplicates are written to each section's mapping only once
 // (keyed by address). However, this plugin does NOT physically merge the
 // duplicated bytes in the output section (as SHF_MERGE/SHF_STRINGS would):
 // every symbol's underlying bytes remain in the output, even when several
-// symbols are addressed alike. The dump file can still be treated as a
+// symbols are addressed alike. Mapping outputs can still be treated as a
 // merged/deduplicated view of the address/content mapping, even though the
 // section's on-disk content is not deduplicated.
 //
-// CAUTION: this plugin assigns each symbol's final address only in the
-// AfterLayout state, i.e. after the linker's relaxation pass has already run
-// and shrunk/rewritten any relocations against these symbols based on their
+// Hexagon references are claimed before scanning and rewritten after layout
+// by ReferenceRewriter. Other targets retain their normal relocation behavior.
+// CAUTION for targets without the reference rewrite: this plugin assigns each
+// symbol's final address only in the AfterLayout state, after relaxation has
+// run and shrunk/rewritten any relocations against these symbols based on their
 // pre-assignment (placeholder) addresses. On targets with link-time
 // relocation relaxation (e.g. RISC-V's R_RISCV_HI20/LO12_I with
 // R_RISCV_RELAX), code that takes the address of one of these symbols may
@@ -69,17 +68,19 @@
 #include "../Support/PluginAPICompat.h"
 #include "../Support/PluginPortable.h"
 #include "Defines.h"
+#include "MappingOutput.h"
 #include "OutputSectionIteratorPlugin.h"
 #include "PluginADT.h"
 #include "PluginVersion.h"
-#include <array>
+#include "ReferenceRewriter.h"
 #include <atomic>
-#include <fstream>
-#include <iomanip>
+#include <cerrno>
+#include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <memory>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -91,17 +92,7 @@ class DLL_A_EXPORT ReassignSectionAddresses
     : public OutputSectionIteratorPlugin {
 public:
   enum class HashKind { MD5, SHA1, Sequential };
-
-  // When debug_dump=yes, and only for sections that already have a main dump=
-  // file configured, also writes a second, parallel
-  // "<path>_debug<ext>" file with one line per symbol (not deduplicated by
-  // address, unlike the main dump, so every symbol's own original address
-  // is visible even when several symbols share a reassigned address) of the
-  // form "<hex hash>:<original address>:<symbol name>:<hex bytes>", where
-  // <hex bytes> is a lowercase hex encoding of the symbol's raw content
-  // bytes (two hex digits per byte, untrimmed) rather than a string
-  // rendering of them. The dump is controlled solely by the plugin option,
-  // rather than the linker's tracing state.
+  using OutputFormat = MappingOutput::Format;
 
   ReassignSectionAddresses()
       : OutputSectionIteratorPlugin("ReassignSectionAddresses") {}
@@ -125,30 +116,27 @@ public:
   //   start=<value>     Starting value for hash=sequential, parsed as a C
   //                     integer literal (e.g. "0x1000" or "4096"); default 0.
   //                     Ignored for hash=md5/sha1.
-  //   dump=<path>[,<path>]*
-  //                     Text file(s) to write "<hex address>:<string>"
-  //                     pairs to, one file per target section, with the
-  //                     address always printed as exactly 8 zero-padded hex
-  //                     digits, and duplicate addresses within a given
-  //                     section's file collapsed to a single line. When
-  //                     more than one
-  //                     target section is given, dump must list exactly
-  //                     one path per section, comma-delimited in the same
-  //                     order as the section list; a count mismatch is a
-  //                     plugin error. If dump is omitted entirely, no
-  //                     dump file is written for any section.
-  //   gzip=<yes|no>      When yes, write each dump as <path>.gz using gzip;
+  //   output=<csv|json>[,<csv|json>]* (or none)
+  //                     Write the selected mapping formats, one file each
+  //                     containing all modified sections. Default none;
+  //                     CSV adds a leading section column.
+  //   suffix=<name>     Filename suffix (default reassign). Outputs are named
+  //                     <image>.<suffix>.csv/.json/.debug.json, with .gz
+  //                     appended when enabled. Must be a nonempty filename
+  //                     component without path separators or control bytes.
+  //   gzip=<yes|no>     Compress all mapping/debug outputs as <path>.gz;
   //                     the uncompressed path is not created (default no).
-  //   debug_dump=<yes|no>
-  //                     When yes, write an uncompressed parallel
-  //                     <path>_debug<ext> dump containing every symbol's
-  //                     assigned address, original address, name, and raw
-  //                     bytes (default no). Requires dump=.
+  //   debug=<yes|no>    Write <output>.<suffix>.debug.json with
+  //                     per-section entries for every modified symbol's
+  //                     assigned/original address,
+  //                     name, raw bytes, and relocation provenance (default
+  //                     no). Independent of output= and tracing.
   //   clean_strings=<yes|no>
-  //                     When yes, clean content printed in the main dump:
-  //                     retain printable ASCII only, remove CR/LF, and
-  //                     replace each run of tabs with one space (default no).
-  //                     The debug dump always retains raw bytes as hex.
+  //                     When yes, clean mapping string fields in CSV/JSON:
+  //                     retain printable ASCII and tabs, remove CR/LF and
+  //                     other control/non-ASCII bytes, and trim trailing
+  //                     whitespace without collapsing tabs (default no).
+  //                     Debug JSON always retains raw bytes as hex.
   void Init(std::string Options) override {
     // Init() may be called more than once on the same plugin instance (the
     // linker's plugin-loading path can invoke it in addition to the
@@ -156,15 +144,16 @@ public:
     // would otherwise accumulate across calls.
     TargetSections.clear();
     SectionIndex.clear();
-    DumpPaths.clear();
+    Hash = HashKind::MD5;
+    NextSequentialAddr = 0;
+    Outputs.clear();
+    Suffix = "reassign";
     Gzip = false;
-    DebugDump = false;
+    Debug = false;
     CleanStrings = false;
     EC = 0;
     LastError = "Success";
 
-    std::string DumpList;
-    bool SawDump = false;
     bool SawSection = false;
     std::string::size_type FieldStart = 0;
     while (true) {
@@ -181,7 +170,18 @@ public:
         std::string Value = Field.substr(EqPos + 1);
         if (Key == "section") {
           SawSection = true;
-          splitOnComma(Value, TargetSections);
+          std::vector<std::string> Sections;
+          splitOnComma(Value, Sections);
+          for (const auto &Section : Sections) {
+            if (Section.empty()) {
+              EC = 1;
+              LastError = "section= must not contain empty section names";
+              return;
+            }
+            if (std::find(TargetSections.begin(), TargetSections.end(),
+                          Section) == TargetSections.end())
+              TargetSections.push_back(Section);
+          }
         } else if (Key == "hash") {
           if (Value == "sha1")
             Hash = HashKind::SHA1;
@@ -189,15 +189,49 @@ public:
             Hash = HashKind::MD5;
           else if (Value == "sequential")
             Hash = HashKind::Sequential;
-          else if (pluginTrace())
-            std::cout << "[ReassignSectionAddresses] Init: unknown hash '"
-                      << Value << "', defaulting to md5\n";
+          else {
+            Hash = HashKind::MD5;
+            if (pluginTrace())
+              std::cout << "[ReassignSectionAddresses] Init: unknown hash '"
+                        << Value << "', defaulting to md5\n";
+          }
         } else if (Key == "start") {
-          NextSequentialAddr =
-              static_cast<uint32_t>(std::stoull(Value, nullptr, 0));
-        } else if (Key == "dump") {
-          DumpList = Value;
-          SawDump = true;
+          size_t First = Value.find_first_not_of(" \t\r\n\f\v");
+          char *End = nullptr;
+          errno = 0;
+          auto Address = std::strtoull(Value.c_str(), &End, 0);
+          if (First == std::string::npos || Value[First] == '-' || errno ||
+              End == Value.c_str() || *End || Address > UINT32_MAX) {
+            EC = 1;
+            LastError = "start= must be an unsigned 32-bit integer";
+            return;
+          }
+          NextSequentialAddr = static_cast<uint32_t>(Address);
+        } else if (Key == "output") {
+          if (!parseOutputs(Value)) {
+            EC = 1;
+            LastError = "output= must be 'none' or a comma-separated list of "
+                        "'csv' and 'json'";
+            if (pluginTrace())
+              std::cout << "[ReassignSectionAddresses] Init: " << LastError
+                        << "\n";
+            return;
+          }
+        } else if (Key == "suffix") {
+          if (Value.empty() ||
+              Value.find_first_of("/\\") != std::string::npos ||
+              std::any_of(Value.begin(), Value.end(), [](unsigned char C) {
+                return C < 0x20 || C == 0x7f;
+              })) {
+            EC = 1;
+            LastError = "suffix= must be a nonempty filename component without "
+                        "path separators or control bytes";
+            if (pluginTrace())
+              std::cout << "[ReassignSectionAddresses] Init: " << LastError
+                        << "\n";
+            return;
+          }
+          Suffix = Value;
         } else if (Key == "gzip") {
           if (!parseYesNo(Value, Gzip)) {
             EC = 1;
@@ -207,10 +241,10 @@ public:
                         << "\n";
             return;
           }
-        } else if (Key == "debug_dump") {
-          if (!parseYesNo(Value, DebugDump)) {
+        } else if (Key == "debug") {
+          if (!parseYesNo(Value, Debug)) {
             EC = 1;
-            LastError = "debug_dump= must be 'yes' or 'no'";
+            LastError = "debug= must be 'yes' or 'no'";
             if (pluginTrace())
               std::cout << "[ReassignSectionAddresses] Init: " << LastError
                         << "\n";
@@ -249,33 +283,6 @@ public:
       SectionIndex[TargetSections[I]] = I;
     TargetOutputSections.assign(TargetSections.size(), OutputSection(nullptr));
 
-    if (SawDump) {
-      std::vector<std::string> Paths;
-      splitOnComma(DumpList, Paths);
-      if (Paths.size() != TargetSections.size()) {
-        EC = 1;
-        std::ostringstream ErrMsg;
-        ErrMsg << "dump= must specify exactly one path per target section ("
-               << TargetSections.size() << " section(s), " << Paths.size()
-               << " dump path(s) given)";
-        LastError = ErrMsg.str();
-        if (pluginTrace())
-          std::cout << "[ReassignSectionAddresses] Init: " << LastError << "\n";
-        return;
-      }
-      DumpPaths = std::move(Paths);
-    } else {
-      DumpPaths.assign(TargetSections.size(), std::string());
-    }
-
-    if (DebugDump && !SawDump) {
-      EC = 1;
-      LastError = "debug_dump=yes requires dump=";
-      if (pluginTrace())
-        std::cout << "[ReassignSectionAddresses] Init: " << LastError << "\n";
-      return;
-    }
-
     if (!pluginTrace())
       return;
     std::cout << "[ReassignSectionAddresses] Init: target section(s)=";
@@ -287,16 +294,15 @@ public:
                       : (Hash == HashKind::Sequential ? "sequential" : "md5"));
     if (Hash == HashKind::Sequential)
       std::cout << ", start=0x" << std::hex << NextSequentialAddr << std::dec;
-    std::cout << ", dump=";
-    if (!SawDump) {
-      std::cout << "<none>";
-    } else {
-      for (size_t I = 0; I < DumpPaths.size(); ++I)
-        std::cout << (I ? "," : "") << DumpPaths[I];
-    }
+    std::cout << ", output=";
+    if (Outputs.empty())
+      std::cout << "none";
+    for (size_t I = 0; I < Outputs.size(); ++I)
+      std::cout << (I ? "," : "")
+                << (Outputs[I] == OutputFormat::CSV ? "csv" : "json");
     std::cout << ", gzip=" << (Gzip ? "yes" : "no")
-              << ", debug_dump=" << (DebugDump ? "yes" : "no")
-              << ", clean_strings=" << (CleanStrings ? "yes" : "no");
+              << ", clean_strings=" << (CleanStrings ? "yes" : "no")
+              << ", debug=" << (Debug ? "yes" : "no") << ", suffix=" << Suffix;
     std::cout << "\n";
   }
 
@@ -313,6 +319,11 @@ public:
 
   Status Run(bool Trace) override {
     TraceEnabled = Trace;
+    if (References && References->failed()) {
+      EC = 1;
+      LastError = "Cannot rewrite references to reassigned symbols";
+      return Status::ERROR;
+    }
     bool AnyFound = false;
     for (const OutputSection &O : TargetOutputSections)
       AnyFound |= static_cast<bool>(O);
@@ -324,180 +335,128 @@ public:
     }
 
     if (getLinker()->isLinkStateAfterLayout()) {
-      // Shared across all target sections, so hash=sequential assigns one
-      // globally-increasing counter value per unique symbol content
-      // regardless of which target section the symbol lives in.
-      std::unordered_map<std::string, uint32_t> SequentialAddrs;
-      const bool ParallelHash =
-          Hash != HashKind::Sequential && getLinker()->isMultiThreaded() &&
-          getLinker()->getPluginThreadCount() > 1;
+      // Freeze the selected symbol order before setSymbolAddress detaches any
+      // symbol from its original chunk. Each relevant file is scanned once.
+      auto Symbols = assignmentSymbols();
+      std::vector<std::vector<ReferenceRewriter::DebugSymbol>> DebugSymbols;
+      if (Debug)
+        DebugSymbols.resize(TargetSections.size());
+      // Input contents remain alive throughout Run; deduplication keys borrow
+      // them too, rather than allocating a copy of every distinct string.
+      std::unordered_map<std::string_view, uint32_t> SequentialAddrs;
+      std::vector<std::vector<MappingEntry>> Entries(TargetSections.size());
+
       for (size_t I = 0; I < TargetOutputSections.size(); ++I) {
-        OutputSection &TargetOutputSection = TargetOutputSections[I];
-        if (!TargetOutputSection)
+        if (!TargetOutputSections[I])
           continue;
         if (Trace)
           std::cout << "[ReassignSectionAddresses] Run (AfterLayout): "
                        "assigning addresses to symbols in '"
-                    << TargetOutputSection.getName() << "'\n";
-        std::unordered_set<uint32_t> DumpedAddrs;
-        const std::string &DumpPath = DumpPaths[I];
-        std::ofstream DumpFile;
-        std::ostringstream GzipBuffer;
-        std::ostream *DumpOut = nullptr;
-        if (!DumpPath.empty()) {
-          if (Gzip) {
-            DumpOut = &GzipBuffer;
-          } else {
-            DumpFile.open(DumpPath, std::ios::out | std::ios::trunc |
-                                         std::ios::binary);
-            if (!DumpFile) {
-              if (Trace)
-                std::cout << "[ReassignSectionAddresses] Run: failed to open "
-                             "dump file '"
-                          << DumpPath << "'\n";
-              return Status::ERROR;
-            }
-            DumpOut = &DumpFile;
-          }
-        }
-        const bool WriteDebugDump = DebugDump && !DumpPath.empty();
-        std::ofstream DebugDumpFile;
-        std::string DebugDumpPath;
-        if (WriteDebugDump) {
-          DebugDumpPath = makeDebugDumpPath(DumpPath);
-          DebugDumpFile.open(DebugDumpPath,
-                             std::ios::out | std::ios::trunc |
-                                 std::ios::binary);
-          if (!DebugDumpFile) {
-            if (Trace)
-              std::cout << "[ReassignSectionAddresses] Run: failed to open "
-                           "debug dump file '"
-                        << DebugDumpPath << "'\n";
+                    << TargetSections[I] << "'\n";
+        std::vector<SymbolWork> Work;
+        Work.reserve(Symbols[I].size());
+        for (Symbol Sym : Symbols[I]) {
+          if (!validateOriginalSymbol(Sym))
             return Status::ERROR;
+          SymbolWork Entry;
+          Entry.Sym = Sym;
+          Entry.OrigAddr = Sym.getAddress();
+          Entry.ContentData = Sym.getChunk().getRawData();
+          if (Entry.ContentData) {
+            Entry.ContentData += Sym.getOffsetInChunk();
+            Entry.ContentSize = Sym.getSize();
+            Entry.Bytes = portable::ArrayRef<uint8_t>(
+                reinterpret_cast<const uint8_t *>(Entry.ContentData),
+                Entry.ContentSize);
+            if (Entry.ContentSize &&
+                Entry.ContentData[Entry.ContentSize - 1] == '\0')
+              --Entry.ContentSize;
+            if (Hash == HashKind::Sequential) {
+              auto Insertion = SequentialAddrs.try_emplace(
+                  std::string_view(Entry.ContentData, Entry.ContentSize),
+                  NextSequentialAddr);
+              if (Insertion.second)
+                ++NextSequentialAddr;
+              Entry.Addr = Insertion.first->second;
+            }
           }
+          Work.push_back(Entry);
         }
-        auto AssignSymbol = [&](const Symbol &Sym, uint32_t Addr,
-                                const char *ContentData, uint32_t ContentSize,
-                                portable::ArrayRef<uint8_t> Bytes,
-                                uint64_t OrigAddr) -> bool {
+        if (Hash != HashKind::Sequential)
+          computeHashesInParallel(Work);
+        std::unordered_set<uint32_t> OutputAddrs;
+        for (const SymbolWork &Entry : Work) {
           if (Trace)
             std::cout << "[ReassignSectionAddresses]   symbol '"
-                      << Sym.getName() << "' -> 0x" << std::hex << Addr
-                      << std::dec << "\n";
-          eld::Expected<void> ExpSet =
-              getLinker()->setSymbolAddress(Sym, Addr);
-          if (!ExpSet) {
-            if (Trace)
-              std::cout << "[ReassignSectionAddresses]   failed to set "
-                           "address for symbol '"
-                        << Sym.getName() << "'\n";
-            getLinker()->reportDiagEntry(std::move(ExpSet.error()));
-            return false;
+                      << Entry.Sym.getName() << "' -> 0x" << std::hex
+                      << Entry.Addr << std::dec << "\n";
+          const Chunk OriginalChunk =
+              Debug ? Entry.Sym.getChunk() : Chunk(nullptr);
+          auto Result = getLinker()->setSymbolAddress(Entry.Sym, Entry.Addr);
+          if (!Result) {
+            getLinker()->reportDiagEntry(std::move(Result.error()));
+            return Status::ERROR;
           }
-          if (!DumpPath.empty() && DumpedAddrs.insert(Addr).second) {
-            *DumpOut << std::hex << std::setfill('0') << std::setw(8) << Addr
-                     << std::dec << ":";
-            writeDumpContent(*DumpOut, ContentData, ContentSize);
-            *DumpOut << "\n";
-          }
-          // DEBUG ONLY: one line per symbol (not deduplicated by address,
-          // unlike the main dump), so every symbol's own original address
-          // remains visible even when several symbols share a reassigned
-          // address.
-          if (WriteDebugDump)
-            DebugDumpFile << std::hex << std::setfill('0') << std::setw(8)
-                          << Addr << std::dec << ":" << std::hex << OrigAddr
-                          << std::dec << ":" << Sym.getName() << ":"
-                          << portable::toHex(Bytes, true) << "\n";
-          return true;
-        };
-
-        if (ParallelHash) {
-          std::vector<SymbolWork> Work;
-          for (LinkerScriptRule Rule :
-               TargetOutputSection.getLinkerScriptRules()) {
-            for (Chunk C : Rule.getChunks()) {
-              for (Symbol Sym : C.getSymbols()) {
-                // Skip non-OBJECT symbols, e.g. ELF mapping symbols such as
-                // ARM/RISC-V's "$d"/"$x", which some targets emit into data
-                // sections but which are not part of the section's actual
-                // data-carrying symbol set.
-                if (!Sym.isObject())
-                  continue;
-                SymbolWork Entry;
-                Entry.Sym = Sym;
-                Entry.OrigAddr = Sym.getAddress();
-                Entry.ContentData = Sym.getChunk().getRawData();
-                if (Entry.ContentData) {
-                  Entry.ContentData += Sym.getOffsetInChunk();
-                  Entry.ContentSize = Sym.getSize();
-                  Entry.Bytes = portable::ArrayRef<uint8_t>(
-                      reinterpret_cast<const uint8_t *>(Entry.ContentData),
-                      Entry.ContentSize);
-                  if (Entry.ContentSize &&
-                      Entry.ContentData[Entry.ContentSize - 1] == '\0')
-                    --Entry.ContentSize;
-                }
-                Work.push_back(Entry);
-              }
-            }
-          }
-          computeHashesInParallel(Work);
-          for (const SymbolWork &Entry : Work) {
-            if (!AssignSymbol(Entry.Sym, Entry.Addr, Entry.ContentData,
-                              Entry.ContentSize, Entry.Bytes,
-                              Entry.OrigAddr))
-              return Status::ERROR;
-          }
-        } else {
-          for (LinkerScriptRule Rule :
-               TargetOutputSection.getLinkerScriptRules()) {
-            for (Chunk C : Rule.getChunks()) {
-              for (Symbol Sym : C.getSymbols()) {
-                // Skip non-OBJECT symbols, e.g. ELF mapping symbols such as
-                // ARM/RISC-V's "$d"/"$x", which some targets emit into data
-                // sections but which are not part of the section's actual
-                // data-carrying symbol set.
-                if (!Sym.isObject())
-                  continue;
-                uint64_t OrigAddr = Sym.getAddress();
-                const char *ContentData = Sym.getChunk().getRawData();
-                uint32_t ContentSize = 0;
-                uint32_t Addr = 0;
-                portable::ArrayRef<uint8_t> Bytes;
-                if (ContentData) {
-                  ContentData += Sym.getOffsetInChunk();
-                  ContentSize = Sym.getSize();
-                  Bytes = portable::ArrayRef<uint8_t>(
-                      reinterpret_cast<const uint8_t *>(ContentData),
-                      ContentSize);
-                  // Drop a trailing NUL baked into the symbol's raw bytes
-                  // (e.g. a C string literal's terminator) from sequential
-                  // keys and human-readable dumps.
-                  if (ContentSize && ContentData[ContentSize - 1] == '\0')
-                    --ContentSize;
-                  if (Hash == HashKind::Sequential) {
-                    std::string Key(ContentData, ContentSize);
-                    auto Insertion = SequentialAddrs.try_emplace(
-                        std::move(Key), NextSequentialAddr);
-                    if (Insertion.second)
-                      ++NextSequentialAddr;
-                    Addr = Insertion.first->second;
-                  } else {
-                    Addr = computeLower32(Bytes);
-                  }
-                }
-                if (!AssignSymbol(Sym, Addr, ContentData, ContentSize, Bytes,
-                                  OrigAddr))
-                  return Status::ERROR;
-              }
-            }
-          }
+          if (!Outputs.empty() && OutputAddrs.insert(Entry.Addr).second)
+            Entries[I].push_back(
+                {Entry.Addr, Entry.ContentData, Entry.ContentSize});
+          if (Debug)
+            DebugSymbols[I].push_back({Entry.Sym, OriginalChunk, Entry.OrigAddr,
+                                       Entry.Addr, Entry.Bytes});
         }
-        if (Gzip && !DumpPath.empty() &&
-            !writeGzipDump(DumpPath + ".gz", GzipBuffer.str()))
-          return Status::ERROR;
+        // The assignment index is no longer needed for this section.
+        std::vector<Symbol>().swap(Symbols[I]);
       }
+      if (References && !References->apply()) {
+        EC = 1;
+        LastError = "Cannot write reassigned symbol references";
+        return Status::ERROR;
+      }
+      // No writer invokes mutable linker APIs. Files have independent owners
+      // and stream borrowed contents; never buffer entire rendered payloads.
+      std::vector<std::unique_ptr<MappingOutput>> Mappings;
+      std::vector<std::function<bool()>> Writers;
+      for (OutputFormat Format : Outputs) {
+        Mappings.push_back(std::make_unique<MappingOutput>(
+            getLinker()->getOutputFileName(), Suffix, Format, Gzip,
+            CleanStrings));
+        auto *Mapping = Mappings.back().get();
+        Writers.push_back([&, Mapping] {
+          for (size_t I = 0; I < Entries.size(); ++I)
+            for (const MappingEntry &E : Entries[I])
+              if (!Mapping->write(TargetSections[I], E.Address, E.Data, E.Size))
+                return false;
+          return Mapping->finish();
+        });
+      }
+      const std::string DebugPath = getLinker()->getOutputFileName() + "." +
+                                    Suffix + ".debug.json" +
+                                    (Gzip ? ".gz" : "");
+      if (Debug) {
+        References->prepareDebug(DebugSymbols);
+        Writers.push_back([&] {
+          return References->writeDebug(DebugPath, TargetSections, DebugSymbols,
+                                        Gzip);
+        });
+      }
+      // Join every writer before inspecting errors, including failed writers.
+      // Report errors in format-list order, not nondeterministic task order.
+      std::vector<uint8_t> Results(Writers.size(), 0);
+      auto Write = [&](size_t I) { Results[I] = Writers[I](); };
+      if (workerCount() > 1 && Writers.size() > 1) {
+        auto &Pool = workPool();
+        for (size_t I = 0; I < Writers.size(); ++I)
+          Pool.run([&, I] { Write(I); });
+        Pool.wait();
+      } else {
+        for (size_t I = 0; I < Writers.size(); ++I)
+          Write(I);
+      }
+      for (size_t I = 0; I < Results.size(); ++I)
+        if (!Results[I])
+          return I < Mappings.size()
+                     ? artifactError("mapping output", Mappings[I]->path())
+                     : artifactError("debug JSON", DebugPath);
     }
 
     return Status::SUCCESS;
@@ -511,7 +470,32 @@ public:
 
   void Destroy() override {}
 
+  void initializeReferences() {
+    if (!References)
+      References = std::make_unique<ReferenceRewriter>(*getLinker());
+    References->initialize(TargetSections, Debug);
+  }
+
+  void collectReference(Use U) { References->collect(U); }
+
 private:
+  Status artifactError(const std::string &Kind, const std::string &Path) {
+    EC = 1;
+    LastError = "failed to write " + Kind + " '" + Path + "'";
+    getLinker()->getDiagnosticBuilder(
+        getLinker()->getErrorDiagID("ReassignSectionAddresses: %0"))
+        << LastError;
+    return Status::ERROR;
+  }
+
+  bool validateOriginalSymbol(Symbol S) {
+    if (!References || References->validateSymbol(S))
+      return true;
+    EC = 1;
+    LastError = "Cannot validate original symbol attribution";
+    return false;
+  }
+
   struct SymbolWork {
     Symbol Sym{nullptr};
     const char *ContentData = nullptr;
@@ -521,9 +505,73 @@ private:
     uint32_t Addr = 0;
   };
 
+  struct MappingEntry {
+    uint32_t Address;
+    const char *Data;
+    uint32_t Size;
+  };
+
+  std::vector<std::vector<Symbol>> assignmentSymbols() {
+    std::unordered_map<const eld::Fragment *, std::vector<Symbol>> ByChunk;
+    std::unordered_set<InputFile> Files;
+    std::vector<std::vector<Chunk>> Chunks(TargetOutputSections.size());
+    for (size_t I = 0; I < TargetOutputSections.size(); ++I) {
+      if (!TargetOutputSections[I])
+        continue;
+      for (LinkerScriptRule Rule :
+           TargetOutputSections[I].getLinkerScriptRules())
+        for (Chunk C : Rule.getChunks()) {
+          Chunks[I].push_back(C);
+          ByChunk.try_emplace(C.getFragment());
+          Files.insert(C.getInputFile());
+        }
+    }
+    for (InputFile F : Files)
+      for (Symbol S : F.getSymbols()) {
+        if (!S.isObject() || S.isUndef() || S.isGarbageCollected())
+          continue;
+        Chunk C = S.getChunk();
+        if (!C)
+          continue;
+        auto It = ByChunk.find(C.getFragment());
+        if (It != ByChunk.end())
+          It->second.push_back(S);
+      }
+    std::vector<std::vector<Symbol>> Result(TargetOutputSections.size());
+    for (size_t I = 0; I < Chunks.size(); ++I)
+      for (Chunk C : Chunks[I]) {
+        const auto &Symbols = ByChunk.at(C.getFragment());
+        Result[I].insert(Result[I].end(), Symbols.begin(), Symbols.end());
+      }
+    return Result;
+  }
+
+  size_t workerCount() const {
+    return getLinker()->isMultiThreaded()
+               ? std::max<size_t>(1, getLinker()->getPluginThreadCount())
+               : 1;
+  }
+
+  ThreadPool &workPool() {
+    if (!WorkPool)
+      WorkPool = std::make_unique<ThreadPool>(workerCount());
+    return *WorkPool;
+  }
+
   void computeHashesInParallel(std::vector<SymbolWork> &Work) {
-    size_t NumWorkers = std::min<size_t>(
-        Work.size(), getLinker()->getPluginThreadCount());
+    // Avoid scheduling tiny inputs, but parallelize even a few large symbols.
+    constexpr size_t BatchSize = 32;
+    size_t Bytes = 0;
+    for (const auto &Entry : Work) {
+      Bytes += Entry.Bytes.size();
+      if (Bytes >= 64 * 1024)
+        break;
+    }
+    size_t Batch = Work.size() < BatchSize ? 1 : BatchSize;
+    size_t NumWorkers =
+        std::min(workerCount(), (Work.size() + Batch - 1) / Batch);
+    if (Work.size() < 256 && Bytes < 64 * 1024)
+      NumWorkers = 1;
     if (NumWorkers < 2) {
       for (SymbolWork &Entry : Work)
         if (Entry.ContentData)
@@ -531,23 +579,22 @@ private:
       return;
     }
 
-    if (!WorkPool || WorkPoolThreads != NumWorkers) {
-      WorkPool = std::make_unique<ThreadPool>(NumWorkers);
-      WorkPoolThreads = NumWorkers;
-    }
+    auto &Pool = workPool();
     std::atomic<size_t> Next{0};
     for (size_t Worker = 0; Worker < NumWorkers; ++Worker) {
-      WorkPool->run([this, &Work, &Next] {
+      Pool.run([this, &Work, &Next, Batch] {
         while (true) {
-          size_t I = Next.fetch_add(1, std::memory_order_relaxed);
+          size_t I = Next.fetch_add(Batch, std::memory_order_relaxed);
           if (I >= Work.size())
             break;
-          if (Work[I].ContentData)
-            Work[I].Addr = computeLower32(Work[I].Bytes);
+          size_t End = std::min(Work.size(), I + Batch);
+          for (; I < End; ++I)
+            if (Work[I].ContentData)
+              Work[I].Addr = computeLower32(Work[I].Bytes);
         }
       });
     }
-    WorkPool->wait();
+    Pool.wait();
   }
 
   static bool parseYesNo(const std::string &Value, bool &Result) {
@@ -562,23 +609,32 @@ private:
     return false;
   }
 
+  bool parseOutputs(const std::string &Value) {
+    Outputs.clear();
+    if (Value == "none")
+      return true;
+    size_t Start = 0;
+    while (true) {
+      size_t End = Value.find(',', Start);
+      std::string Name = Value.substr(Start, End - Start);
+      if (Name != "csv" && Name != "json")
+        return false;
+      OutputFormat Format =
+          Name == "csv" ? OutputFormat::CSV : OutputFormat::JSON;
+      if (std::find(Outputs.begin(), Outputs.end(), Format) == Outputs.end())
+        Outputs.push_back(Format);
+      if (End == std::string::npos)
+        return true;
+      Start = End + 1;
+    }
+  }
+
   bool pluginTrace() const {
 #if ELD_PLUGIN_HAS_TRACE_HELPER
     return getLinker()->isTraced();
 #else
     return TraceEnabled;
 #endif
-  }
-
-  bool writeGzipDump(const std::string &Path, const std::string &Payload) {
-    if (!portable::gzipPayload(Path, Payload)) {
-      if (pluginTrace())
-        std::cout << "[ReassignSectionAddresses] Run: failed to write gzip "
-                     "dump file '"
-                  << Path << "'\n";
-      return false;
-    }
-    return true;
   }
 
   static void splitOnComma(const std::string &S,
@@ -593,43 +649,6 @@ private:
     }
   }
 
-  void writeDumpContent(std::ostream &Out, const char *ContentData,
-                        uint32_t ContentSize) const {
-    if (!ContentData || !ContentSize)
-      return;
-    if (!CleanStrings) {
-      Out.write(ContentData, ContentSize);
-      return;
-    }
-
-    bool PreviousWasTab = false;
-    for (uint32_t I = 0; I < ContentSize; ++I) {
-      unsigned char Byte = static_cast<unsigned char>(ContentData[I]);
-      if (Byte == '\r' || Byte == '\n')
-        continue;
-      if (Byte == '\t') {
-        if (!PreviousWasTab)
-          Out.put(' ');
-        PreviousWasTab = true;
-        continue;
-      }
-      PreviousWasTab = false;
-      if (Byte >= 0x20 && Byte <= 0x7e)
-        Out.put(static_cast<char>(Byte));
-    }
-  }
-
-  // DEBUG ONLY: inserts "_debug" before Path's extension (or appends it if
-  // Path has no extension), e.g. "foo.txt" -> "foo_debug.txt".
-  static std::string makeDebugDumpPath(const std::string &Path) {
-    std::string::size_type SlashPos = Path.find_last_of("/\\");
-    std::string::size_type DotPos = Path.find_last_of('.');
-    if (DotPos == std::string::npos ||
-        (SlashPos != std::string::npos && DotPos < SlashPos))
-      return Path + "_debug";
-    return Path.substr(0, DotPos) + "_debug" + Path.substr(DotPos);
-  }
-
   // Returns the lower 32 bits of the configured hash of Bytes.
   uint32_t computeLower32(portable::ArrayRef<uint8_t> Bytes) const {
     if (Hash == HashKind::SHA1)
@@ -641,16 +660,36 @@ private:
   std::unordered_map<std::string, size_t> SectionIndex;
   std::vector<OutputSection> TargetOutputSections;
   HashKind Hash = HashKind::MD5;
-  std::vector<std::string> DumpPaths;
+  std::vector<OutputFormat> Outputs;
+  std::string Suffix = "reassign";
   bool Gzip = false;
-  bool DebugDump = false;
+  bool Debug = false;
   bool CleanStrings = false;
   uint32_t NextSequentialAddr = 0;
   uint32_t EC = 0;
   std::string LastError = "Success";
   std::unique_ptr<ThreadPool> WorkPool;
-  size_t WorkPoolThreads = 0;
   bool TraceEnabled = false;
+  // Init may be re-entered by the output-section iterator. Its parser state
+  // resets normally, but the original-symbol/relocation snapshot survives.
+  std::unique_ptr<ReferenceRewriter> References;
 };
 
 ELD_REGISTER_PLUGIN(ReassignSectionAddresses)
+
+class ReassignRelocationConfig : public LinkerPluginConfig {
+public:
+  explicit ReassignRelocationConfig(ReassignSectionAddresses *P)
+      : LinkerPluginConfig(P), P(P) {}
+  void Init() override { P->initializeReferences(); }
+  void RelocCallBack(Use U) override { P->collectReference(U); }
+
+private:
+  ReassignSectionAddresses *P;
+};
+
+extern "C" LinkerPluginConfig DLL_A_EXPORT *getPluginConfig(const char *) {
+  static std::unique_ptr<ReassignRelocationConfig> Config;
+  Config = std::make_unique<ReassignRelocationConfig>(ThisPlugin);
+  return Config.get();
+}

@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# Exercise plugin-owned GOT references, section offsets and invalid packets.
+# Validate debug=yes provenance against original records and final image bytes.
+RUN: %python %p/Inputs/check_reference_rewrite.py --compiler %clang --compiler-flags="%clangopts" --link %link --readelf %readelf --objdump %objdump --work %t

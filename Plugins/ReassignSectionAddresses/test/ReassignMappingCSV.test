@@ -1,0 +1,3 @@
+# Binary-safe CSV checks must preserve NULs, quoting and CRLF record endings,
+# including on Python versions whose csv.reader rejects embedded NULs.
+RUN: %python %p/Inputs/test_mapping_csv.py

@@ -63,6 +63,7 @@ def input_strings(args, objects):
     references = []
     for obj in objects:
         info = inspect(args, obj)
+        symtab = symbols(info)
         sects = sections(info)
         data = obj.read_bytes()
         for sym in symbols(info):
@@ -87,7 +88,8 @@ def input_strings(args, objects):
             for item in group["Relocs"]:
                 reloc = item["Relocation"]
                 name = reloc["Symbol"]["Name"]
-                if name not in strings:
+                target = symtab[reloc["Symbol"]["Value"]]
+                if target["Section"]["Name"] not in TARGET_SECTIONS:
                     continue
                 offset = reloc["Offset"]
                 owners = [s for s in functions
@@ -110,6 +112,15 @@ def input_strings(args, objects):
                     addend = (addend - (offset - packet)) & MASK32
                     kind = {"R_HEX_B32_PCREL_X": "R_HEX_32_6_X",
                             "R_HEX_6_PCREL_X": "R_HEX_16_X"}[kind]
+                if target["Type"]["Name"] == "Section":
+                    target_offset = target["Value"] + addend
+                    matches = [s for s in symtab
+                               if s["Type"]["Name"] == "Object" and
+                               s["Section"]["Value"] == target["Section"]["Value"] and
+                               s["Value"] <= target_offset < s["Value"] + s["Size"]]
+                    assert len(matches) == 1, (obj, reloc, matches)
+                    name = matches[0]["Name"]["Name"]
+                    addend = target_offset - matches[0]["Value"]
                 references.append({"function": function["Name"]["Name"],
                                    "offset": offset - function["Value"],
                                    "symbol": name, "kind": kind, "addend": addend})
@@ -222,13 +233,7 @@ def check_image(args, image, strings, references, algorithm, start, pic):
     if not dynamic:
         retained = {r["Offset"]: r for r in relocations(info, executable_only=True)
                     if r["Symbol"]["Name"] in strings}
-        assert retained.keys() == at.keys(), "missing retained relocations"
-        for address, original in at.items():
-            actual = retained[address]
-            assert actual["Type"]["Name"] == original["kind"], (original, actual)
-            assert actual["Symbol"]["Name"] == original["symbol"], (original, actual)
-            assert actual["Addend"] & MASK32 == original["addend"] & MASK32, (
-                original, actual)
+        assert not retained.keys() & at.keys(), "plugin-owned relocations retained"
 
     # The ordinary string is a negative control: it must not become an ID.
     ordinary = [s for s in symbols(info) if "ordinary_address" in s["Name"]["Name"]
@@ -275,8 +280,7 @@ def main():
                       "-" + opt, flag,
                       "-DEXPECT_PIC_LEVEL=" + str(pic_level),
                       "-DEXPECT_PIE_LEVEL=" + str(pie_level),
-                      "-ffunction-sections", "-fdata-sections",
-                      "-Wa,--reloc-section-sym=none"]
+                      "-ffunction-sections", "-fdata-sections"]
             if args.language == "c++":
                 common += ["-fno-exceptions", "-fno-rtti"]
             objects = [variant / "callers.o", variant / "callees.o"]

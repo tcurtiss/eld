@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.does-not-exist:hash=sequential:start=0x200:dump=missing.dump
+    Options: section=.does-not-exist:hash=sequential:start=0x200:output=csv

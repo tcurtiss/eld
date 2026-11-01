@@ -4,7 +4,7 @@
 # Tests the ReassignSectionAddresses OutputSectionIteratorPlugin.  The plugin
 # assigns absolute addresses to data/object symbols in DSECT output sections.
 # The cases cover sequential assignment, cross-section duplicate reuse, MD5
-# and SHA1 hashing, dump generation, debug dumps, tracing, missing sections,
+# and SHA1 hashing, CSV generation, debug JSON, tracing, missing sections,
 # and malformed options. Function symbols are deliberately outside the target
 # sections:
 # setSymbolAddress is only valid for object/data symbols.
@@ -14,29 +14,23 @@ RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.data.o -fdata-sections
 
 # Sequential mode: first unique content gets 0x100, duplicate content reuses
 # that address, and the sequence continues across both target sections.
-RUN: rm -f reassign_a.dump reassign_b.dump reassign_a_debug.dump reassign_b_debug.dump
 RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.sequential.out --plugin-config %p/Inputs/PluginConfigSequential.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=SEQUENTIAL-TRACE
-RUN: %filecheck < reassign_a.dump %s --check-prefix=SEQUENTIAL-A
-RUN: %filecheck < reassign_b.dump %s --check-prefix=SEQUENTIAL-B
-RUN: test ! -e reassign_a_debug.dump
-RUN: test ! -e reassign_b_debug.dump
+RUN: %filecheck < %t.sequential.out.reassign.csv %s --check-prefix=SEQUENTIAL-A
+RUN: %filecheck < %t.sequential.out.reassign.csv %s --check-prefix=SEQUENTIAL-B
 # Repeat sequential mode with the linker thread pool disabled to cover the
 # direct, non-preprocessing path as well.
-RUN: rm -f reassign_a.dump reassign_b.dump
 RUN: %link --no-threads --emit-relocs %t.data.o -T %p/Inputs/script.t -e main -o %t.sequential-serial.out --plugin-config %p/Inputs/PluginConfigSequential.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
-RUN: %filecheck < reassign_a.dump %s --check-prefix=SEQUENTIAL-A
-RUN: %filecheck < reassign_b.dump %s --check-prefix=SEQUENTIAL-B
+RUN: %filecheck < %t.sequential-serial.out.reassign.csv %s --check-prefix=SEQUENTIAL-A
+RUN: %filecheck < %t.sequential-serial.out.reassign.csv %s --check-prefix=SEQUENTIAL-B
 
-# debug_dump=yes writes the parallel debug dump without linker tracing.
-RUN: rm -f reassign_debug.dump reassign_debug_debug.dump
-RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.debug-dump.out --plugin-config %p/Inputs/PluginConfigDebugDump.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
-RUN: %filecheck < reassign_debug.dump %s --check-prefix=DEBUG-DUMP
-RUN: %filecheck < reassign_debug_debug.dump %s --check-prefix=DEBUG-DUMP-DETAIL
+# debug=yes writes per-symbol JSON independently of linker tracing.
+RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.debug.out --plugin-config %p/Inputs/PluginConfigDebug.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
+RUN: %filecheck < %t.debug.out.reassign.csv %s --check-prefix=DEBUG-CSV
+RUN: %python %p/Inputs/check_section_outputs.py %t.debug.out reassign_a
 
 # clean_strings=yes removes control and non-ASCII bytes from the main dump.
-RUN: rm -f reassign_clean.dump
 RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.clean-strings.out --plugin-config %p/Inputs/PluginConfigCleanStrings.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
-RUN: %filecheck < reassign_clean.dump %s --check-prefix=CLEAN-STRINGS
+RUN: %filecheck < %t.clean-strings.out.reassign.csv %s --check-prefix=CLEAN-STRINGS --strict-whitespace
 
 # MD5 mode uses the full symbol bytes, including the compiler-provided NUL.
 RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.md5.out --plugin-config %p/Inputs/PluginConfigMD5.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
@@ -47,33 +41,29 @@ RUN: %readelf -s %t.md5.out | %filecheck %s --check-prefix=MD5-SYMBOLS
 RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.unknown-options.out --plugin-config %p/Inputs/PluginConfigUnknownOptions.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=UNKNOWN-OPTIONS --allow-empty
 
 # SHA1 mode also exercises dump generation and duplicate-address suppression.
-RUN: rm -f reassign_sha1.dump
 RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.sha1.out --plugin-config %p/Inputs/PluginConfigSHA1.yaml 2>&1 | %filecheck %s --check-prefix=SUCCESS --allow-empty
-RUN: %filecheck < reassign_sha1.dump %s --check-prefix=SHA1-DUMP
+RUN: %filecheck < %t.sha1.out.reassign.csv %s --check-prefix=SHA1-DUMP
 
-# gzip=yes appends .gz and leaves the requested uncompressed path absent.
-RUN: rm -f reassign_gzip.dump reassign_gzip.dump.gz
+# gzip=yes appends .gz and leaves the uncompressed CSV path absent.
 RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.gzip.out --plugin-config %p/Inputs/PluginConfigGzip.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=GZIP-TRACE
-RUN: test ! -e reassign_gzip.dump
-RUN: %python -c "import gzip; print(gzip.open('reassign_gzip.dump.gz','rt').read(), end='')" | %filecheck %s --check-prefix=GZIP-DUMP
+RUN: test ! -e %t.gzip.out.reassign.csv
+RUN: %python -c "import gzip; print(gzip.open('%t.gzip.out.reassign.csv.gz','rt').read(), end='')" | %filecheck %s --check-prefix=GZIP-DUMP
 
 # A configured section that is not present is a successful no-op.
-RUN: rm -f missing.dump
 RUN: %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.missing.out --plugin-config %p/Inputs/PluginConfigMissingSection.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=MISSING-SECTION
-RUN: test ! -e missing.dump
+RUN: test ! -e %t.missing.out.reassign.csv
 
 # Init-time validation errors.
 RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.no-section.out --plugin-config %p/Inputs/PluginConfigNoSection.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=NO-SECTION
-RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.dump-mismatch.out --plugin-config %p/Inputs/PluginConfigDumpMismatch.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=DUMP-MISMATCH
+RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.invalid-output.out --plugin-config %p/Inputs/PluginConfigInvalidOutput.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=INVALID-OUTPUT
 RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.invalid-gzip.out --plugin-config %p/Inputs/PluginConfigInvalidGzip.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=INVALID-GZIP
-RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.invalid-debug-dump.out --plugin-config %p/Inputs/PluginConfigInvalidDebugDump.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=INVALID-DEBUG-DUMP
-RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.debug-dump-no-dump.out --plugin-config %p/Inputs/PluginConfigDebugDumpNoDump.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=DEBUG-DUMP-NO-DUMP
+RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.invalid-debug.out --plugin-config %p/Inputs/PluginConfigInvalidDebug.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=INVALID-DEBUG
 RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.invalid-clean-strings.out --plugin-config %p/Inputs/PluginConfigInvalidCleanStrings.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=INVALID-CLEAN-STRINGS
 #END_TEST
 
 SUCCESS-NOT: Error
 
-SEQUENTIAL-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a,.reassign_b, hash=sequential, start=0x100, dump=reassign_a.dump,reassign_b.dump, gzip=no, debug_dump=no
+SEQUENTIAL-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a,.reassign_b, hash=sequential, start=0x100, output=csv, gzip=no, clean_strings=no, debug=no
 SEQUENTIAL-TRACE: [ReassignSectionAddresses] Run (AfterLayout): assigning addresses to symbols in '.reassign_a'
 SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'same_a' -> 0x100
 SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'other_a' -> 0x101
@@ -82,20 +72,17 @@ SEQUENTIAL-TRACE: [ReassignSectionAddresses] Run (AfterLayout): assigning addres
 SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'same_b' -> 0x100
 SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'third_b' -> 0x102
 
-SEQUENTIAL-A: 00000100:same
-SEQUENTIAL-A: 00000101:other
+SEQUENTIAL-A: section,address,string
+SEQUENTIAL-A-NEXT: ".reassign_a",0x00000100,"same"
+SEQUENTIAL-A: ".reassign_a",0x00000101,"other"
 SEQUENTIAL-A-NOT: same_a_duplicate
-SEQUENTIAL-A-NOT: 00000102
-SEQUENTIAL-B: 00000100:same
-SEQUENTIAL-B: 00000102:third
+SEQUENTIAL-B: ".reassign_b",0x00000100,"same"
+SEQUENTIAL-B: ".reassign_b",0x00000102,"third"
 
-DEBUG-DUMP: 00000100:same
-DEBUG-DUMP: 00000101:other
-DEBUG-DUMP-DETAIL: 00000100:0:same_a:73616d6500
-DEBUG-DUMP-DETAIL: 00000101:5:other_a:6f7468657200
-DEBUG-DUMP-DETAIL: 00000100:b:same_a_duplicate:73616d6500
+DEBUG-CSV: ".reassign_a",0x00000100,"same"
+DEBUG-CSV: ".reassign_a",0x00000101,"other"
 
-CLEAN-STRINGS: 00000100:A BCD
+CLEAN-STRINGS: ".reassign_clean",0x00000100,"A{{[[:blank:]][[:blank:]]}}BCD"
 
 # The exact digest values are checked through the symbol table.  The same
 # bytes must receive the same MD5 address in both symbols.
@@ -103,13 +90,13 @@ MD5-SYMBOLS: {{.*}}863425c2{{.*}}other_a
 MD5-SYMBOLS: {{.*}}ccab33c7{{.*}}same_a
 MD5-SYMBOLS: {{.*}}ccab33c7{{.*}}same_a_duplicate
 
-SHA1-DUMP: a47ad810:same
-SHA1-DUMP: 35bb3c79:other
+SHA1-DUMP: ".reassign_a",0xA47AD810,"same"
+SHA1-DUMP: ".reassign_a",0x35BB3C79,"other"
 SHA1-DUMP-NOT: same_a_duplicate
 
-GZIP-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a, hash=sequential, start=0x100, dump=reassign_gzip.dump, gzip=yes, debug_dump=no
-GZIP-DUMP: 00000100:same
-GZIP-DUMP: 00000101:other
+GZIP-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a, hash=sequential, start=0x100, output=csv, gzip=yes, clean_strings=no, debug=no
+GZIP-DUMP: ".reassign_a",0x00000100,"same"
+GZIP-DUMP: ".reassign_a",0x00000101,"other"
 GZIP-DUMP-NOT: same_a_duplicate
 
 MISSING-SECTION: [ReassignSectionAddresses] Run: no target output section found, nothing to do
@@ -123,17 +110,14 @@ UNKNOWN-OPTIONS: [ReassignSectionAddresses] Init: ignoring malformed option fiel
 NO-SECTION-DAG: Fatal: Linking had errors
 NO-SECTION-DAG: section= is required and must specify at least one target output section
 
-DUMP-MISMATCH-DAG: Fatal: Linking had errors
-DUMP-MISMATCH-DAG: dump= must specify exactly one path per target section (2 section(s), 1 dump path(s) given)
+INVALID-OUTPUT-DAG: Fatal: Linking had errors
+INVALID-OUTPUT-DAG: output= must be 'none' or a comma-separated list of 'csv' and 'json'
 
 INVALID-GZIP-DAG: Fatal: Linking had errors
 INVALID-GZIP-DAG: gzip= must be 'yes' or 'no'
 
-INVALID-DEBUG-DUMP-DAG: Fatal: Linking had errors
-INVALID-DEBUG-DUMP-DAG: debug_dump= must be 'yes' or 'no'
-
-DEBUG-DUMP-NO-DUMP-DAG: Fatal: Linking had errors
-DEBUG-DUMP-NO-DUMP-DAG: debug_dump=yes requires dump=
+INVALID-DEBUG-DAG: Fatal: Linking had errors
+INVALID-DEBUG-DAG: debug= must be 'yes' or 'no'
 
 INVALID-CLEAN-STRINGS-DAG: Fatal: Linking had errors
 INVALID-CLEAN-STRINGS-DAG: clean_strings= must be 'yes' or 'no'
