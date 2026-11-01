@@ -877,6 +877,35 @@ eld::Expected<Use> LinkerWrapper::createAndAddUse(Chunk C, off_t Offset,
   return Use(relocation);
 }
 
+thread_local LinkerWrapper *LinkerWrapper::RelocationCallbackOwner = nullptr;
+thread_local eld::Relocation *LinkerWrapper::RelocationCallbackUse = nullptr;
+
+eld::Expected<void> LinkerWrapper::claimUse(Use U) {
+  auto *R = U.getRelocation();
+  auto Fail = [](const char *Reason) -> eld::Expected<void> {
+    return std::make_unique<DiagnosticEntry>(Diag::error_plugin_owned_use,
+                                             std::vector<std::string>{Reason});
+  };
+  if (!R || RelocationCallbackOwner != this || RelocationCallbackUse != R)
+    return Fail("not in a relocation callback");
+  if (m_Module.getConfig().isLinkPartial())
+    return Fail("partial links are not supported");
+  auto Source = U.getSourceChunk();
+  auto Offset = U.getOffsetInChunk();
+  auto Size = R->size(*m_Module.getBackend().getRelocator()) / 8;
+  if (!Source || !Source.isProgBits() || !Size || Size > sizeof(uint64_t) ||
+      Offset < 0 || uint64_t(Offset) > Source.getSize() ||
+      Size > Source.getSize() - uint64_t(Offset))
+    return Fail("source has no writable relocation-sized data");
+  if (!m_Module.claimRelocation(R, this))
+    return Fail("relocation already owned or overridden by a plugin");
+  return {};
+}
+
+bool LinkerWrapper::isSymbolPreemptible(Symbol S) const {
+  return !S || m_Module.getBackend().isSymbolPreemptible(*S.getSymbol());
+}
+
 /// Return the value of the relocation target
 eld::Expected<void> LinkerWrapper::getTargetDataForUse(Use &U,
                                                        uint64_t &Data) const {
@@ -895,7 +924,10 @@ eld::Expected<void> LinkerWrapper::setTargetDataForUse(Use &U, uint64_t Data) {
   if (!R)
     return std::make_unique<DiagnosticEntry>(
         DiagnosticEntry(Diag::error_invalid_use));
-  m_Module.setRelocationData(R, Data);
+  if (!m_Module.setRelocationData(R, Data, this))
+    return std::make_unique<DiagnosticEntry>(
+        Diag::error_plugin_owned_use,
+        std::vector<std::string>{"replacement supplied by a different plugin"});
   if (LayoutInfo *printer = m_Module.getLayoutInfo()) {
     auto *Op = eld::make<RelocationDataPluginOp>(this, R);
     printer->recordRelocationData(this, Op);

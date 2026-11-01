@@ -817,9 +817,26 @@ uint64_t Module::getImageLayoutChecksum() const {
   return Hash;
 }
 
-void Module::setRelocationData(const eld::Relocation *R, uint64_t Data) {
+bool Module::setRelocationData(const eld::Relocation *R, uint64_t Data,
+                               const plugin::LinkerWrapper *Owner) {
   std::lock_guard<std::mutex> Guard(Mutex);
-  RelocationData.insert({R, Data});
+  // Serialize the ownership check with both claims and data insertion. A
+  // concurrent claim must not let another plugin supply the winning value.
+  auto It = PluginRelocations.find(R);
+  if (It != PluginRelocations.end() && It->second != Owner) {
+    HasPluginRelocationDataConflict = true;
+    return false;
+  }
+  // An unclaimed replacement also belongs to its first writer. Only that
+  // writer may update the value.
+  auto [DataIt, Inserted] =
+      RelocationData.try_emplace(R, RelocationDataEntry{Data, Owner});
+  if (!Inserted && DataIt->second.Owner != Owner) {
+    HasPluginRelocationDataConflict = true;
+    return false;
+  }
+  DataIt->second.Data = Data;
+  return true;
 }
 
 bool Module::getRelocationData(const eld::Relocation *R, uint64_t &Data) {
@@ -832,8 +849,52 @@ bool Module::getRelocationDataForSync(const eld::Relocation *R,
   auto It = RelocationData.find(R);
   if (It == RelocationData.end())
     return false;
-  Data = It->second;
+  Data = It->second.Data;
   return true;
+}
+
+bool Module::claimRelocation(eld::Relocation *R,
+                             const plugin::LinkerWrapper *Owner) {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  if (RelocationData.count(R) ||
+      !PluginRelocations.try_emplace(R, Owner).second) {
+    HasPluginRelocationClaimConflict = true;
+    return false;
+  }
+  R->setPluginOwned();
+  return true;
+}
+
+bool Module::validatePluginRelocations() {
+  // Report conflicts at the application boundary even when a plugin ignored
+  // its failed API result. Plugins that report errors stop the link earlier.
+  bool Valid =
+      !HasPluginRelocationClaimConflict && !HasPluginRelocationDataConflict;
+  if (HasPluginRelocationClaimConflict)
+    getConfig().raise(Diag::error_plugin_owned_use)
+        << "relocation already owned or overridden by a plugin";
+  if (HasPluginRelocationDataConflict)
+    getConfig().raise(Diag::error_plugin_owned_use)
+        << "replacement supplied by a different plugin";
+  for (const auto &Entry : PluginRelocations) {
+    const Relocation *R = Entry.first;
+    const ELFSection *S = R->targetRef()->frag()->getOwningSection();
+    if (S->isIgnore() || S->isDiscard() ||
+        (S->getOutputSection() && S->getOutputSection()->isDiscard()))
+      continue;
+    if (R->targetRef()->getOutputELFSection()->isNoBits()) {
+      getConfig().raise(Diag::error_plugin_owned_use)
+          << ("source has no output file storage: " +
+              R->getSourcePath(getConfig().options()));
+      Valid = false;
+    } else if (!RelocationData.count(R)) {
+      getConfig().raise(Diag::error_plugin_owned_use_missing_data)
+          << R->getSourcePath(getConfig().options())
+          << llvm::utohexstr(R->targetRef()->offset());
+      Valid = false;
+    }
+  }
+  return Valid;
 }
 
 void Module::addReferencedSymbol(Section &RefencingSection,

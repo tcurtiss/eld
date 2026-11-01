@@ -19,6 +19,7 @@
 #include "eld/Support/RegisterTimer.h"
 #include "eld/Support/StringUtils.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Path.h"
@@ -380,6 +381,14 @@ void Plugin::callReloc(uint32_t RelocType, Relocation *R) {
   auto RelocCallBack =
       std::bind(&plugin::LinkerPluginConfig::RelocCallBack,
                 LinkerPluginConfigHandle, std::placeholders::_1);
+  auto *PreviousOwner = plugin::LinkerWrapper::RelocationCallbackOwner;
+  auto *PreviousUse = plugin::LinkerWrapper::RelocationCallbackUse;
+  plugin::LinkerWrapper::RelocationCallbackOwner = getLinkerWrapper();
+  plugin::LinkerWrapper::RelocationCallbackUse = R;
+  llvm::scope_exit Restore([&] {
+    plugin::LinkerWrapper::RelocationCallbackOwner = PreviousOwner;
+    plugin::LinkerWrapper::RelocationCallbackUse = PreviousUse;
+  });
   RelocCallBack(plugin::Use(R));
 }
 
