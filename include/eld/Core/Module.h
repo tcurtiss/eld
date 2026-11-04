@@ -538,7 +538,7 @@ public:
 
   // ------------------- Relocation data set by plugins ---------------------
   bool setRelocationData(const eld::Relocation *, uint64_t,
-                         const plugin::LinkerWrapper *);
+                         plugin::LinkerWrapper *);
   bool getRelocationData(const eld::Relocation *, uint64_t &);
   bool getRelocationDataForSync(const eld::Relocation *, uint64_t &);
   bool claimRelocation(eld::Relocation *, const plugin::LinkerWrapper *);

@@ -818,7 +818,7 @@ uint64_t Module::getImageLayoutChecksum() const {
 }
 
 bool Module::setRelocationData(const eld::Relocation *R, uint64_t Data,
-                               const plugin::LinkerWrapper *Owner) {
+                               plugin::LinkerWrapper *Owner) {
   std::lock_guard<std::mutex> Guard(Mutex);
   // Serialize the ownership check with both claims and data insertion. A
   // concurrent claim must not let another plugin supply the winning value.
@@ -826,6 +826,12 @@ bool Module::setRelocationData(const eld::Relocation *R, uint64_t Data,
   if (It != PluginRelocations.end() && It->second != Owner)
     return false;
   RelocationData.insert({R, Data});
+  // The arena allocator and layout-map containers also need serialization
+  // when plugins submit replacement data from worker threads.
+  if (LayoutInfo *Printer = getLayoutInfo()) {
+    auto *Op = eld::make<RelocationDataPluginOp>(Owner, R);
+    Printer->recordRelocationData(Owner, Op);
+  }
   return true;
 }
 

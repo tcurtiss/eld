@@ -928,10 +928,6 @@ eld::Expected<void> LinkerWrapper::setTargetDataForUse(Use &U, uint64_t Data) {
     return std::make_unique<DiagnosticEntry>(
         Diag::error_plugin_owned_use,
         std::vector<std::string>{"replacement supplied by a different plugin"});
-  if (LayoutInfo *printer = m_Module.getLayoutInfo()) {
-    auto *Op = eld::make<RelocationDataPluginOp>(this, R);
-    printer->recordRelocationData(this, Op);
-  }
   return {};
 }
 

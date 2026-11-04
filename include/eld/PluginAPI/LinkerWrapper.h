@@ -637,7 +637,11 @@ public:
   /// scanning and GOT/PLT/dynamic relocation allocation still occur.
   /// The value contains complete instruction/data bytes for the storage field,
   /// not an unencoded operand for the linker to apply. Calls are thread-safe,
-  /// but all worker tasks must finish before the plugin's hook returns.
+  /// including layout-map bookkeeping. All worker tasks
+  /// launched by an overridden plugin callback must finish before that
+  /// callback returns, for example OutputSectionIteratorPlugin::Run() during
+  /// AfterLayout. This guarantee does not extend to other plugin APIs or
+  /// concurrent layout-map reads.
   eld::Expected<void> setTargetDataForUse(Use &U, uint64_t Data);
 
   /// Returns the 32-bit checksum of the image layout if this function is

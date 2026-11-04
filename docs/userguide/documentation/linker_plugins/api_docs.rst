@@ -39,9 +39,10 @@ supply final bytes with ``setTargetDataForUse`` before relocation application.
 For an output-section iterator this can be done in its ``AfterLayout`` run,
 when final addresses are available. The first accepted replacement is retained;
 later calls do not overwrite it, and another plugin cannot supply the replacement
-for a claimed use. Replacement calls are thread-safe, but finish all worker tasks
-before returning from the plugin hook. Missing replacement data and
-NOLOAD/NOBITS output storage are diagnosed before relocation application.
+for a claimed use. Replacement calls are thread-safe, including layout-map
+bookkeeping; workers launched by an overridden plugin callback must finish
+before that callback returns. Missing replacement data and NOLOAD/NOBITS output
+storage are diagnosed before relocation application.
 
 ELD skips normal target scanning and application for claimed uses. Those uses
 do not reserve GOT/PLT entries or dynamic relocations and are omitted from
@@ -66,6 +67,25 @@ for binding, visibility, output type, symbol versioning, and ``-Bsymbolic`` /
 a null symbol conservatively returns ``true``. Before replacing a reference
 with a fixed value, a plugin must decide whether doing so preserves required
 runtime interposition.
+
+Relocation replacement data
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``LinkerWrapper::setTargetDataForUse(Use &U, uint64_t Data)`` supplies complete
+instruction or data bytes for a relocation's storage field, not an unencoded
+operand. The first value supplied for a use is retained; subsequent successful
+calls do not overwrite it. A null use returns an error.
+
+Plugins may submit replacement data from worker threads, including when a
+layout map is enabled. Replacement insertion, allocation of the corresponding
+map operation, and updates to map bookkeeping are serialized together.
+All worker tasks launched by an overridden plugin callback must finish before
+that callback returns, for example ``OutputSectionIteratorPlugin::Run()``
+during ``AfterLayout``. This does not require all tasks to finish before an
+individual ``setTargetDataForUse()`` call returns. Other plugin APIs and
+concurrent layout-map reads are not covered by this guarantee.
+Replacing storage bytes does not suppress normal relocation scanning or
+allocation of GOT/PLT entries and dynamic relocations.
 
 Plugin Abstract Data Types
 -----------------------------
