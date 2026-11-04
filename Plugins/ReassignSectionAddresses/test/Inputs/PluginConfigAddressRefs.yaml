@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.dedup:hash=sequential:start=0xfedcba98
+    Options: section=.dedup:hash=seq:seq_start=0xfedcba98

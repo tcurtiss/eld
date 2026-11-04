@@ -28,7 +28,7 @@ config.write_text('''GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.dedup:hash=sequential:start=0xfedcba98
+    Options: section=.dedup:hash=seq:seq_start=0xfedcba98
 ''')
 script = work / "layout.t"
 script.write_text('''SECTIONS {
@@ -80,7 +80,7 @@ def link_case(name, source, error=None, extra=(), options=(), input_error=True,
         case_config = work / (name + ".yaml")
         case_config.write_text(config.read_text().replace(
             "section=.dedup", "section=" + selected).replace(
-            "start=0xfedcba98", "start=0xfedcba98:" + ":".join(options)))
+            "seq_start=0xfedcba98", "seq_start=0xfedcba98:" + ":".join(options)))
     command = [*shlex.split(args.link), "--shared",
                *(["--emit-relocs"] if emit_relocs else []),
                "--thread-count", "4", "--plugin-config", case_config, "-T", script, *extra,
@@ -280,7 +280,7 @@ def check_sidecar(image, count, compressed=False):
 
 
 # Validate the original object records and replacement image bytes, not just
-# JSON existence. Neither linker tracing nor output= enables provenance.
+# JSON existence. Neither linker tracing nor output_format= enables provenance.
 disabled = link_case("debug-disabled", pair + targets, options=("debug=no",))
 assert not sidecar(disabled).exists(), disabled
 sidecar(disabled).write_text("existing sidecar\n")
@@ -319,7 +319,7 @@ records = check_sidecar(link_case("debug-unaligned", '.data\n.byte 0\n.word fmt\
 assert records[0]["source"]["offset"] == 1, records
 
 debug_image = link_case("debug-with-compressed-outputs", pair + targets,
-                       options=("debug=yes", "output=csv,json", "gzip=yes",
+                       options=("debug=yes", "output_format=csv,json", "gzip=yes",
                                 "clean_strings=yes"))
 check_sidecar(debug_image, 2, compressed=True)
 dump = Path(str(debug_image) + ".reassign.csv")
@@ -344,7 +344,7 @@ assert not sidecar(compressed_only).exists(), compressed_only
 # References to different selected sections stay with their owning symbol.
 split_targets = targets.replace(".local second", '.section .dedup_other,"a",@progbits\n.local second')
 multi = link_case("debug-multiple-sections", '.data\n.word fmt\n.word second\n' + split_targets,
-                  options=("debug=yes", "output=csv"), selected=".dedup,.dedup_other")
+                  options=("debug=yes", "output_format=csv"), selected=".dedup,.dedup_other")
 for section, name, address, raw in ((".dedup", "fmt", 0xfedcba98, b"format\0"),
                                   (".dedup_other", "second", 0xfedcba99, b"second\0")):
     document = json.loads(sidecar(multi).read_text())
@@ -413,7 +413,7 @@ if Path("/dev/full").exists():
             full.symlink_to("/dev/full")
             try:
                 link_case(name, pair + targets, "failed to write mapping output",
-                          options=("output=" + format_name,
+                          options=("output_format=" + format_name,
                                    "gzip=" + ("yes" if compressed else "no")),
                           input_error=False)
             finally:

@@ -175,7 +175,7 @@ def check_image(args, image, strings, references, algorithm, start, pic):
             assert value == int.from_bytes(hashlib.sha1(content).digest()[-4:], "big")
         assert by_content.setdefault(content, value) == value, name
         values[name] = value
-    if algorithm == "sequential":
+    if algorithm == "seq":
         assert set(by_content.values()) == {
             (start + i) & MASK32 for i in range(len(by_content))}
 
@@ -304,14 +304,14 @@ def main():
             original = inspect(args, baseline)
             original_sizes = {s["Name"]["Name"]: s["Size"] for s in symbols(original)
                               if s["Type"]["Name"] == "Function"}
-            for algorithm in ("sequential", "md5", "sha1"):
+            for algorithm in ("seq", "md5", "sha1"):
                 config = variant / (algorithm + ".yaml")
                 config.write_text(
                     "GlobalPlugins:\n"
                     "  - Type: OutputSectionIterator\n"
                     "    Name: ReassignSectionAddresses\n"
                     "    Library: ReassignSectionAddresses\n"
-                    "    Options: section=.dedup,.dedup_aux:hash={}:start={}\n".format(
+                    "    Options: section=.dedup,.dedup_aux:hash={}:seq_start={}\n".format(
                         algorithm, hex(start)))
                 for base in (0x10000, 0x42000000):
                     images = []
