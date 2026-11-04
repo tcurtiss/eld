@@ -3,48 +3,48 @@
 # mapping/debug file and keeps the complete image filename and directory.
 RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
 RUN: mkdir -p %t.images
-RUN: sed 's/output=csv/output=csv,json:debug=yes/' %p/Inputs/PluginConfigSequential.yaml > %t.default.yaml
+RUN: sed 's/output_format=csv/output_format=csv,json:debug=yes/' %p/Inputs/PluginConfigSequential.yaml > %t.default.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.images/image.so --plugin-config %t.default.yaml --trace=plugin 2>&1 | %filecheck %s --check-prefix=DEFAULT
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/image.so --format csv --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/image.so --format json --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_section_outputs.py %t.images/image.so reassign_a reassign_b
 RUN: %python -c "from pathlib import Path; assert not list(Path('%t.images').glob('image.so.reassigned.*'))"
 # Filename components can contain spaces, dots and UTF-8 characters.
-RUN: sed 's/:debug=yes/:debug=yes:suffix=string ids.v1-é/' %t.default.yaml > %t.custom.yaml
+RUN: sed 's/:debug=yes/:debug=yes:output_suffix=string ids.v1-é/' %t.default.yaml > %t.custom.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.images/custom.so --plugin-config %t.custom.yaml
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/custom.so --format csv --suffix "string ids.v1-é" --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/custom.so --format json --suffix "string ids.v1-é" --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_section_outputs.py %t.images/custom.so reassign_a reassign_b --suffix "string ids.v1-é"
 RUN: %python -c "from pathlib import Path; assert not list(Path('%t.images').glob('custom.so.reassign.*'))"
 # Gzip appends .gz after the custom suffix and format extension.
-RUN: sed 's/:debug=yes/:debug=yes:suffix=string_ids:gzip=yes/' %t.default.yaml > %t.gzip.yaml
+RUN: sed 's/:debug=yes/:debug=yes:output_suffix=string_ids:gzip=yes/' %t.default.yaml > %t.gzip.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.images/compressed.so --plugin-config %t.gzip.yaml
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/compressed.so --format csv --suffix string_ids --gzip --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/compressed.so --format json --suffix string_ids --gzip --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_section_outputs.py %t.images/compressed.so reassign_a reassign_b --suffix string_ids --gzip
 # Repeated suffix keys use the last value, including a reset to the default.
-RUN: sed 's/:debug=yes/:debug=yes:suffix=old:suffix=reassign/' %t.default.yaml > %t.repeat.yaml
+RUN: sed 's/:debug=yes/:debug=yes:output_suffix=old:output_suffix=reassign/' %t.default.yaml > %t.repeat.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.images/repeat.so --plugin-config %t.repeat.yaml
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/repeat.so --format csv --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_mapping_output.py %t.images/repeat.so --format json --sections .reassign_a .reassign_b
 RUN: %python %p/Inputs/check_section_outputs.py %t.images/repeat.so reassign_a reassign_b
 RUN: %python -c "from pathlib import Path; assert not list(Path('%t.images').glob('repeat.so.old.*'))"
 # The suffix also applies when only debug output is enabled.
-RUN: sed 's/output=csv,json/output=none/;s/:debug=yes/:debug=yes:suffix=debug-only:gzip=yes/' %t.default.yaml > %t.debug.yaml
+RUN: sed 's/output_format=csv,json/output_format=none/;s/:debug=yes/:debug=yes:output_suffix=debug-only:gzip=yes/' %t.default.yaml > %t.debug.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.images/debug.so --plugin-config %t.debug.yaml
 RUN: %python %p/Inputs/check_section_outputs.py %t.images/debug.so reassign_a reassign_b --suffix debug-only --gzip
 RUN: test ! -e %t.images/debug.so.debug-only.csv.gz
 RUN: test ! -e %t.images/debug.so.debug-only.json.gz
 # Reject empty suffixes and path separators instead of changing directories.
-RUN: sed 's/:debug=yes/:debug=yes:suffix=/' %t.default.yaml > %t.empty.yaml
+RUN: sed 's/:debug=yes/:debug=yes:output_suffix=/' %t.default.yaml > %t.empty.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-empty.out --plugin-config %t.empty.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
-RUN: sed 's/:debug=yes/:debug=yes:suffix=bad\/name/' %t.default.yaml > %t.slash.yaml
+RUN: sed 's/:debug=yes/:debug=yes:output_suffix=bad\/name/' %t.default.yaml > %t.slash.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-slash.out --plugin-config %t.slash.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
-RUN: sed 's/:debug=yes/:debug=yes:suffix=bad\\name/' %t.default.yaml > %t.backslash.yaml
+RUN: sed 's/:debug=yes/:debug=yes:output_suffix=bad\\name/' %t.default.yaml > %t.backslash.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-backslash.out --plugin-config %t.backslash.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
 # A tab decoded from a quoted YAML value is a forbidden control byte.
-RUN: %python -c "import json; from pathlib import Path; s=Path('%t.default.yaml').read_text(); prefix,value=s.split('    Options: '); Path('%t.control.yaml').write_text(prefix+'    Options: '+json.dumps(value.strip()+':suffix=bad'+chr(9)+'name')+'\n')"
+RUN: %python -c "import json; from pathlib import Path; s=Path('%t.default.yaml').read_text(); prefix,value=s.split('    Options: '); Path('%t.control.yaml').write_text(prefix+'    Options: '+json.dumps(value.strip()+':output_suffix=bad'+chr(9)+'name')+'\n')"
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.invalid-control.out --plugin-config %t.control.yaml 2>&1 | %filecheck %s --check-prefix=INVALID
 
-DEFAULT: suffix=reassign
-INVALID: suffix= must be a nonempty filename component without path separators or control bytes
+DEFAULT: output_suffix=reassign
+INVALID: output_suffix= must be a nonempty filename component without path separators or control bytes

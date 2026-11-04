@@ -101,14 +101,14 @@ script.write_text("""SECTIONS {
 image = work / "image.out"
 config = work / "plugins.yaml"
 
-for mode in ("md5", "sha1", "sequential"):
+for mode in ("md5", "sha1", "seq"):
     baseline = None
     for compressed in ((False, True) if args.references else (False,)):
         config.write_text("""GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.reassign_a,.reassign_b:hash={}:start=0x100:output=csv,json:debug=yes:gzip={}
+    Options: section=.reassign_a,.reassign_b:hash={}:seq_start=0x100:output_format=csv,json:debug=yes:gzip={}
 """.format(mode, "yes" if compressed else "no"))
         counts = (0, 1, 2, 4, 8) if args.references else (0, 2, 8)
         for count in counts:
@@ -185,7 +185,7 @@ for formats in ("csv,json", "json,csv"):
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.reassign_a,.reassign_b:output={}:debug=yes
+    Options: section=.reassign_a,.reassign_b:output_format={}:debug=yes
 """.format(formats))
     command = [*shlex.split(args.link), *objects, "-T", script, "-e", "entry_0",
                "--plugin-config", config, "-o", failure_image, "--thread-count", "8"]

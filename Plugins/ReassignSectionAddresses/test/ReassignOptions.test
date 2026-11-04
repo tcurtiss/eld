@@ -7,24 +7,41 @@ RUN: sed 's/section=.reassign_a,.reassign_b/section=.reassign_a,/' %p/Inputs/Plu
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.trailing.out --plugin-config %t.trailing.yaml 2>&1 | %filecheck %s --check-prefix=SECTION
 RUN: sed 's/section=.reassign_a,.reassign_b/section=.reassign_a,,.reassign_b/' %p/Inputs/PluginConfigSequential.yaml > %t.middle.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.middle.out --plugin-config %t.middle.yaml 2>&1 | %filecheck %s --check-prefix=SECTION
-RUN: sed 's/start=0x100/start=/' %p/Inputs/PluginConfigSequential.yaml > %t.no-start.yaml
+RUN: sed 's/seq_start=0x100/seq_start=/' %p/Inputs/PluginConfigSequential.yaml > %t.no-start.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.no-start.out --plugin-config %t.no-start.yaml 2>&1 | %filecheck %s --check-prefix=START
-RUN: sed 's/start=0x100/start=0x100junk/' %p/Inputs/PluginConfigSequential.yaml > %t.junk.yaml
+RUN: sed 's/seq_start=0x100/seq_start=0x100junk/' %p/Inputs/PluginConfigSequential.yaml > %t.junk.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.junk.out --plugin-config %t.junk.yaml 2>&1 | %filecheck %s --check-prefix=START
-RUN: sed 's/start=0x100/start=0x100000000/' %p/Inputs/PluginConfigSequential.yaml > %t.overflow.yaml
+RUN: sed 's/seq_start=0x100/seq_start=0x100000000/' %p/Inputs/PluginConfigSequential.yaml > %t.overflow.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.overflow.out --plugin-config %t.overflow.yaml 2>&1 | %filecheck %s --check-prefix=START
-RUN: sed 's/start=0x100/start=-1/' %p/Inputs/PluginConfigSequential.yaml > %t.negative.yaml
+RUN: sed 's/seq_start=0x100/seq_start=-1/' %p/Inputs/PluginConfigSequential.yaml > %t.negative.yaml
 RUN: %not %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.negative.out --plugin-config %t.negative.yaml 2>&1 | %filecheck %s --check-prefix=START
+# Sequential IDs default to zero when seq_start is omitted.
+RUN: sed 's/:seq_start=0x100//' %p/Inputs/PluginConfigSequential.yaml > %t.default-start.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.default-start.out --plugin-config %t.default-start.yaml
+RUN: %readelf -s %t.default-start.out | %filecheck %s --check-prefix=DEFAULT-START
+# Decimal and octal seq_start values agree with hexadecimal assignment.
+RUN: sed 's/seq_start=0x100/seq_start=256/' %p/Inputs/PluginConfigSequential.yaml > %t.decimal.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.decimal.out --plugin-config %t.decimal.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.decimal.out --format csv --sections .reassign_a .reassign_b
+RUN: sed 's/seq_start=0x100/seq_start=0400/' %p/Inputs/PluginConfigSequential.yaml > %t.octal.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.octal.out --plugin-config %t.octal.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.octal.out --format csv --sections .reassign_a .reassign_b
+# Repeated seq_start keys use their last value.
+RUN: sed 's/seq_start=0x100/seq_start=0:seq_start=0x100/' %p/Inputs/PluginConfigSequential.yaml > %t.repeated-start.yaml
+RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.repeated-start.out --plugin-config %t.repeated-start.yaml
+RUN: %python %p/Inputs/check_mapping_output.py %t.repeated-start.out --format csv --sections .reassign_a .reassign_b
 # Duplicate/repeated sections preserve first-seen ordering and assignments.
 RUN: sed 's/section=.reassign_a,.reassign_b/section=.reassign_a,.reassign_a:section=.reassign_b,.reassign_a/' %p/Inputs/PluginConfigSequential.yaml > %t.duplicate.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.duplicate.out --plugin-config %t.duplicate.yaml
 RUN: %python %p/Inputs/check_mapping_output.py %t.duplicate.out --format csv --sections .reassign_a .reassign_b
 # Unknown hash names really restore MD5 after a preceding different mode.
-RUN: sed 's/hash=sequential/hash=sha1:hash=unknown/' %p/Inputs/PluginConfigSequential.yaml > %t.hash.yaml
+RUN: sed 's/hash=seq/hash=sha1:hash=unknown/' %p/Inputs/PluginConfigSequential.yaml > %t.hash.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.hash.out --plugin-config %t.hash.yaml
 RUN: %readelf -s %t.hash.out | %filecheck %s --check-prefix=MD5
 
 SECTION: section= must not contain empty section names
-START: start= must be an unsigned 32-bit integer
+START: seq_start= must be an unsigned 32-bit integer
+DEFAULT-START-DAG: 00000000{{.*}}same_a
+DEFAULT-START-DAG: 00000001{{.*}}other_a
 MD5-DAG: 863425c2{{.*}}other_a
 MD5-DAG: ccab33c7{{.*}}same_a

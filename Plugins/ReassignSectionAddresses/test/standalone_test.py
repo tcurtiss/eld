@@ -81,8 +81,8 @@ def main():
                   "  - Type: OutputSectionIterator\n"
                   "    Name: ReassignSectionAddresses\n"
                   "    Library: ReassignSectionAddresses\n"
-                  "    Options: section=.reassign_a:hash=sequential:"
-                  "start=0x100:output=csv:debug=yes\n")
+                  "    Options: section=.reassign_a:hash=seq:"
+                  "seq_start=0x100:output_format=csv:debug=yes\n")
         config_path = work / "plugins.yaml"
         config_path.write_text(config)
         link_command = [args.target_ld]
@@ -110,7 +110,7 @@ def main():
             raise RuntimeError("ReassignSectionAddresses trace was not observed:\n" + log)
 
         # Exercise both mapping formats against the same compiled input.
-        config_path.write_text(config.replace("output=csv", "output=json"))
+        config_path.write_text(config.replace("output_format=csv", "output_format=json"))
         run(link_command, env, work)
         mapping_path = Path(str(output) + ".reassign.json")
         mapping = json.loads(mapping_path.read_text())
@@ -124,9 +124,9 @@ def main():
                                repr(mapping))
 
         # Both formats with a custom suffix; gzip also applies to debug JSON.
-        config_path.write_text(config.replace("output=csv",
-                                              "output=csv,json:gzip=yes:"
-                                              "suffix=custom-map"))
+        config_path.write_text(config.replace("output_format=csv",
+                                              "output_format=csv,json:gzip=yes:"
+                                              "output_suffix=custom-map"))
         run(link_command, env, work)
         for path in (dump, mapping_path, debug_path):
             custom = Path(str(path).replace(".reassign.", ".custom-map."))

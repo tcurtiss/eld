@@ -69,12 +69,12 @@ than one value, its value list remains comma-delimited:
 | Option | Default | Description |
 | --- | --- | --- |
 | `section=<name>[,<name>...]` | required | Output sections to process. |
-| `hash=md5\|sha1\|sequential` | `md5` | Address assignment mode. |
-| `start=<value>` | `0` | Starting address for `hash=sequential`; accepts a complete unsigned 32-bit decimal, hexadecimal, or octal integer. |
-| `output=csv\|json[,csv\|json...]` or `output=none` | `none` | Selects one or both mapping formats, e.g. `output=csv,json`. Writes one `.<suffix>.csv` and/or `.<suffix>.json` per image containing all modified sections. `none` disables mapping output. |
-| `suffix=<name>` | `reassign` | Filename component used for every mapping/debug output: `<output-file>.<suffix>.csv`, `.json`, or `.debug.json`. |
+| `hash=md5\|sha1\|seq` | `md5` | Address assignment mode. |
+| `seq_start=<value>` | `0` | Starting address for `hash=seq`; accepts a complete unsigned 32-bit decimal, hexadecimal, or octal integer. |
+| `output_format=csv\|json[,csv\|json...]` or `output_format=none` | `none` | Selects one or both mapping formats, e.g. `output_format=csv,json`. Writes one `.<output_suffix>.csv` and/or `.<output_suffix>.json` per image containing all modified sections. `none` disables mapping output. |
+| `output_suffix=<name>` | `reassign` | Filename component used for every mapping/debug output: `<output-file>.<output_suffix>.csv`, `.json`, or `.debug.json`. |
 | `gzip=yes\|no` | `no` | Compresses every generated mapping and debug file and appends `.gz`; does not create the uncompressed files. |
-| `debug=yes\|no` | `no` | Writes one `<output-file>.<suffix>.debug.json`, grouping every modified symbol's assigned/original address, name, raw bytes, and relocation provenance by output section. Independent of mapping output and linker tracing; compressed when `gzip=yes`. |
+| `debug=yes\|no` | `no` | Writes one `<output-file>.<output_suffix>.debug.json`, grouping every modified symbol's assigned/original address, name, raw bytes, and relocation provenance by output section. Independent of mapping output and linker tracing; compressed when `gzip=yes`. |
 | `clean_strings=yes\|no` | `no` | In CSV/JSON mapping string fields only, retains printable ASCII and tabs, removes CR/LF and other control/non-ASCII bytes, and trims trailing whitespace. Tab runs are not collapsed. |
 
 Example plugin configuration:
@@ -84,11 +84,11 @@ GlobalPlugins:
   - Type: OutputSectionIteratorPlugin
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.dedup:hash=md5:output=csv,json:gzip=yes:debug=yes
+    Options: section=.dedup:hash=md5:output_format=csv,json:gzip=yes:debug=yes
 ```
 
-In sequential mode, identical symbol contents share one address across all
-selected sections. In MD5 and SHA1 modes, the address is derived from the
+In sequential mode (`hash=seq`), identical symbol contents share one address
+across all selected sections. In MD5 and SHA1 modes, the address is derived from the
 symbol bytes. The plugin still leaves the original bytes in the output; it
 does not physically merge sections or symbols.
 
@@ -108,14 +108,14 @@ normalized contents until the counter wraps.
 ### Combined CSV and JSON mappings
 
 All output paths retain the full linker output filename, including its
-extension. `suffix=reassign` is the default. Set, for example,
-`suffix=string_ids` to produce `image.so.string_ids.csv`,
+extension. `output_suffix=reassign` is the default. Set, for example,
+`output_suffix=string_ids` to produce `image.so.string_ids.csv`,
 `image.so.string_ids.json`, and `image.so.string_ids.debug.json` when enabled.
 `gzip=yes` appends `.gz` to each. The suffix must be nonempty and contain no
 path separators or control bytes; it changes filenames only, not file contents.
-Repeated `suffix=` keys use the last value.
+Repeated `output_suffix=` keys use the last value.
 
-`output=csv` writes one `image.so.reassign.csv` beside linker output
+`output_format=csv` writes one `image.so.reassign.csv` beside linker output
 `image.so`, containing all modified sections. The first column is the original
 output section name (including a leading dot, if present). CSV includes a
 header, CRLF record endings, and addresses formatted as `0xXXXXXXXX` (eight
@@ -130,7 +130,7 @@ section,address,string
 ".other_strings",0x00000101,"a comma, and ""quotes"""
 ```
 
-`output=json` writes one `image.so.reassign.json`. The version-1 object
+`output_format=json` writes one `image.so.reassign.json`. The version-1 object
 contains `schema_version`, `plugin`, `output_file`, and a `sections` array.
 Each section has its original `section` name and an `entries` array containing
 the same address/string pairs as CSV. JSON addresses are decimal numbers,
@@ -154,16 +154,17 @@ Both formats follow configured section order and symbol assignment order.
 Duplicate addresses are written once **within each section**; a shared address
 in two sections appears in both sections' mappings. Absent sections and sections
 with no modified object symbols are omitted. No mapping file is created when
-there are no modified symbols. `output=none` (the default) disables mapping
+there are no modified symbols. `output_format=none` (the default) disables mapping
 output without disabling address assignment or detailed debug JSON.
 
-Use `output=csv,json` (or `output=json,csv`) to generate both mappings in the
-same link. Duplicate formats are ignored. `none` must appear alone; unknown
-formats and empty list items are errors. Repeated `output=` keys replace the
-previous selection, as with other non-list options.
+Use `output_format=csv,json` (or `output_format=json,csv`) to generate both
+mappings in the same link. Duplicate formats are ignored. `none` must appear
+alone; unknown formats and empty list items are errors. Repeated
+`output_format=` keys replace the previous selection, as with other non-list
+options.
 
 `gzip=yes` applies to **every generated file**, including debug JSON. For
-`output=csv,json:debug=yes:gzip=yes`, the files are:
+`output_format=csv,json:debug=yes:gzip=yes`, the files are:
 
 - `image.so.reassign.csv.gz`
 - `image.so.reassign.json.gz`
@@ -190,7 +191,7 @@ cleaned.
 ### Combined symbol and relocation debug JSON
 
 Set `debug=yes` to inspect every modified symbol and the work performed on
-its plugin-owned relocations, even when `output=none`:
+its plugin-owned relocations, even when `output_format=none`:
 
 ```yaml
     Options: section=.dedup:hash=md5:debug=yes

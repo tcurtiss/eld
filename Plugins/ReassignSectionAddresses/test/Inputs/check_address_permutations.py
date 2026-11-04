@@ -37,7 +37,7 @@ def plugin_config(work, algorithm="md5"):
         "  - Type: OutputSectionIterator\n"
         "    Name: ReassignSectionAddresses\n"
         "    Library: ReassignSectionAddresses\n"
-        "    Options: section=.dedup,.dedup_aux:hash={}:start=0xffffffff\n".format(
+        "    Options: section=.dedup,.dedup_aux:hash={}:seq_start=0xffffffff\n".format(
             algorithm))
     return config
 
@@ -275,7 +275,7 @@ def native_case(args, work, case):
                 "*(.text*)", "KEEP(*(.text.repeated_macro)) *(.text*)"))
     if case == "phdrs":
         script = inputs / "address_patterns_phdrs.t"
-    algorithm = "sequential" if case == "sequential-reverse" else "md5"
+    algorithm = "seq" if case == "sequential-reverse" else "md5"
     config = plugin_config(work, algorithm)
     command = [args.link, "--" + args.mode, *flags, *objects, "-T", script,
                "-e", "return_address", "--plugin-config", config]

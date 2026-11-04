@@ -8,7 +8,7 @@
 // in one or more named output sections. By default, and with
 // hash=md5/hash=sha1, the address is derived from the lower 32 bits of
 // a hash (MD5 or SHA1, selectable via plugin options) of the symbol's own
-// content. Alternatively, hash=sequential assigns increasing integer values
+// content. Alternatively, hash=seq assigns increasing integer values
 // starting at a configurable constant, one per unique symbol content, in
 // the order symbols are encountered, across all target sections combined.
 // Each target section must be declared in the linker script with the
@@ -105,32 +105,33 @@ public:
   //                     target output section names; every listed section
   //                     is processed identically and shares the options
   //                     below.
-  //   hash=<md5|sha1|sequential>
+  //   hash=<md5|sha1|seq>
   //                     Address assignment mode (default md5), shared by
-  //                     all target sections. "sequential" assigns
+  //                     all target sections. "seq" assigns
   //                     increasing integer values, one per unique symbol
   //                     content across *all* target sections combined,
-  //                     starting at the value given by "start" (see
+  //                     starting at the value given by "seq_start" (see
   //                     below), in the order symbols are encountered
   //                     while iterating the sections.
-  //   start=<value>     Starting value for hash=sequential, parsed as a C
+  //   seq_start=<value> Starting value for hash=seq, parsed as a C
   //                     integer literal (e.g. "0x1000" or "4096"); default 0.
   //                     Ignored for hash=md5/sha1.
-  //   output=<csv|json>[,<csv|json>]* (or none)
+  //   output_format=<csv|json>[,<csv|json>]* (or none)
   //                     Write the selected mapping formats, one file each
   //                     containing all modified sections. Default none;
   //                     CSV adds a leading section column.
-  //   suffix=<name>     Filename suffix (default reassign). Outputs are named
-  //                     <image>.<suffix>.csv/.json/.debug.json, with .gz
+  //   output_suffix=<name>
+  //                     Filename suffix (default reassign). Outputs are named
+  //                     <image>.<output_suffix>.csv/.json/.debug.json, with .gz
   //                     appended when enabled. Must be a nonempty filename
   //                     component without path separators or control bytes.
   //   gzip=<yes|no>     Compress all mapping/debug outputs as <path>.gz;
   //                     the uncompressed path is not created (default no).
-  //   debug=<yes|no>    Write <output>.<suffix>.debug.json with
+  //   debug=<yes|no>    Write <output>.<output_suffix>.debug.json with
   //                     per-section entries for every modified symbol's
   //                     assigned/original address,
   //                     name, raw bytes, and relocation provenance (default
-  //                     no). Independent of output= and tracing.
+  //                     no). Independent of output_format= and tracing.
   //   clean_strings=<yes|no>
   //                     When yes, clean mapping string fields in CSV/JSON:
   //                     retain printable ASCII and tabs, remove CR/LF and
@@ -187,7 +188,7 @@ public:
             Hash = HashKind::SHA1;
           else if (Value == "md5")
             Hash = HashKind::MD5;
-          else if (Value == "sequential")
+          else if (Value == "seq")
             Hash = HashKind::Sequential;
           else {
             Hash = HashKind::MD5;
@@ -195,7 +196,7 @@ public:
               std::cout << "[ReassignSectionAddresses] Init: unknown hash '"
                         << Value << "', defaulting to md5\n";
           }
-        } else if (Key == "start") {
+        } else if (Key == "seq_start") {
           size_t First = Value.find_first_not_of(" \t\r\n\f\v");
           char *End = nullptr;
           errno = 0;
@@ -203,29 +204,31 @@ public:
           if (First == std::string::npos || Value[First] == '-' || errno ||
               End == Value.c_str() || *End || Address > UINT32_MAX) {
             EC = 1;
-            LastError = "start= must be an unsigned 32-bit integer";
+            LastError = "seq_start= must be an unsigned 32-bit integer";
             return;
           }
           NextSequentialAddr = static_cast<uint32_t>(Address);
-        } else if (Key == "output") {
+        } else if (Key == "output_format") {
           if (!parseOutputs(Value)) {
             EC = 1;
-            LastError = "output= must be 'none' or a comma-separated list of "
-                        "'csv' and 'json'";
+            LastError =
+                "output_format= must be 'none' or a comma-separated list of "
+                "'csv' and 'json'";
             if (pluginTrace())
               std::cout << "[ReassignSectionAddresses] Init: " << LastError
                         << "\n";
             return;
           }
-        } else if (Key == "suffix") {
+        } else if (Key == "output_suffix") {
           if (Value.empty() ||
               Value.find_first_of("/\\") != std::string::npos ||
               std::any_of(Value.begin(), Value.end(), [](unsigned char C) {
                 return C < 0x20 || C == 0x7f;
               })) {
             EC = 1;
-            LastError = "suffix= must be a nonempty filename component without "
-                        "path separators or control bytes";
+            LastError =
+                "output_suffix= must be a nonempty filename component without "
+                "path separators or control bytes";
             if (pluginTrace())
               std::cout << "[ReassignSectionAddresses] Init: " << LastError
                         << "\n";
@@ -291,10 +294,11 @@ public:
     std::cout << ", hash="
               << (Hash == HashKind::SHA1
                       ? "sha1"
-                      : (Hash == HashKind::Sequential ? "sequential" : "md5"));
+                      : (Hash == HashKind::Sequential ? "seq" : "md5"));
     if (Hash == HashKind::Sequential)
-      std::cout << ", start=0x" << std::hex << NextSequentialAddr << std::dec;
-    std::cout << ", output=";
+      std::cout << ", seq_start=0x" << std::hex << NextSequentialAddr
+                << std::dec;
+    std::cout << ", output_format=";
     if (Outputs.empty())
       std::cout << "none";
     for (size_t I = 0; I < Outputs.size(); ++I)
@@ -302,7 +306,8 @@ public:
                 << (Outputs[I] == OutputFormat::CSV ? "csv" : "json");
     std::cout << ", gzip=" << (Gzip ? "yes" : "no")
               << ", clean_strings=" << (CleanStrings ? "yes" : "no")
-              << ", debug=" << (Debug ? "yes" : "no") << ", suffix=" << Suffix;
+              << ", debug=" << (Debug ? "yes" : "no")
+              << ", output_suffix=" << Suffix;
     std::cout << "\n";
   }
 

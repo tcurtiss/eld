@@ -63,7 +63,7 @@ RUN: %not %link %linkopts %t.data.o -T %p/Inputs/script.t -e main -o %t.invalid-
 
 SUCCESS-NOT: Error
 
-SEQUENTIAL-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a,.reassign_b, hash=sequential, start=0x100, output=csv, gzip=no, clean_strings=no, debug=no
+SEQUENTIAL-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a,.reassign_b, hash=seq, seq_start=0x100, output_format=csv, gzip=no, clean_strings=no, debug=no
 SEQUENTIAL-TRACE: [ReassignSectionAddresses] Run (AfterLayout): assigning addresses to symbols in '.reassign_a'
 SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'same_a' -> 0x100
 SEQUENTIAL-TRACE: [ReassignSectionAddresses]   symbol 'other_a' -> 0x101
@@ -94,7 +94,7 @@ SHA1-DUMP: ".reassign_a",0xA47AD810,"same"
 SHA1-DUMP: ".reassign_a",0x35BB3C79,"other"
 SHA1-DUMP-NOT: same_a_duplicate
 
-GZIP-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a, hash=sequential, start=0x100, output=csv, gzip=yes, clean_strings=no, debug=no
+GZIP-TRACE: [ReassignSectionAddresses] Init: target section(s)=.reassign_a, hash=seq, seq_start=0x100, output_format=csv, gzip=yes, clean_strings=no, debug=no
 GZIP-DUMP: ".reassign_a",0x00000100,"same"
 GZIP-DUMP: ".reassign_a",0x00000101,"other"
 GZIP-DUMP-NOT: same_a_duplicate
@@ -111,7 +111,7 @@ NO-SECTION-DAG: Fatal: Linking had errors
 NO-SECTION-DAG: section= is required and must specify at least one target output section
 
 INVALID-OUTPUT-DAG: Fatal: Linking had errors
-INVALID-OUTPUT-DAG: output= must be 'none' or a comma-separated list of 'csv' and 'json'
+INVALID-OUTPUT-DAG: output_format= must be 'none' or a comma-separated list of 'csv' and 'json'
 
 INVALID-GZIP-DAG: Fatal: Linking had errors
 INVALID-GZIP-DAG: gzip= must be 'yes' or 'no'

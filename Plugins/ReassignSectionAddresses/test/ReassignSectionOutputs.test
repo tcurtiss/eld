@@ -3,10 +3,10 @@
 # symbol even without claimed references.
 RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
 RUN: rm -f %t.default.out.reassign.debug.json %t.default.out.reassign.csv
-RUN: sed 's/:output=.*//' %p/Inputs/PluginConfigSequential.yaml > %t.default.yaml
+RUN: sed 's/:output_format=.*//' %p/Inputs/PluginConfigSequential.yaml > %t.default.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.default.out --plugin-config %t.default.yaml
 RUN: %python -c "from pathlib import Path; assert not list(Path('%t.default.out').parent.glob(Path('%t.default.out').name+'.reassign.*'))"
-RUN: sed 's/:output=.*/:debug=yes/' %p/Inputs/PluginConfigSequential.yaml > %t.debug.yaml
+RUN: sed 's/:output_format=.*/:debug=yes/' %p/Inputs/PluginConfigSequential.yaml > %t.debug.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.debug.out --plugin-config %t.debug.yaml
 RUN: %python %p/Inputs/check_section_outputs.py %t.debug.out reassign_a reassign_b
 RUN: %python -c "import json; d=json.load(open('%t.debug.out.reassign.debug.json')); assert [s['section'] for s in d['sections']]==['.reassign_a','.reassign_b']"
@@ -16,7 +16,7 @@ RUN: cp %t.debug.out.reassign.debug.json %t.parallel.json
 RUN: %link --no-threads %t.o -T %p/Inputs/script.t -e main -o %t.debug.out --plugin-config %t.debug.yaml
 RUN: cmp %t.parallel.json %t.debug.out.reassign.debug.json
 # Hash preprocessing with threads enabled preserves debug symbol order too.
-RUN: sed 's/hash=sequential/hash=md5/' %t.debug.yaml > %t.hash.yaml
+RUN: sed 's/hash=seq/hash=md5/' %t.debug.yaml > %t.hash.yaml
 RUN: %link --thread-count 4 %t.o -T %p/Inputs/script.t -e main -o %t.hash.out --plugin-config %t.hash.yaml
 RUN: cp %t.hash.out.reassign.debug.json %t.hash-parallel.json
 RUN: %link --no-threads %t.o -T %p/Inputs/script.t -e main -o %t.hash.out --plugin-config %t.hash.yaml
@@ -28,13 +28,13 @@ RUN: test ! -e %t.debug-only.out.reassign.csv
 # Existing artifacts are untouched when their options are disabled.
 RUN: cp %t.parallel.json %t.default.out.reassign.debug.json
 RUN: cp %t.parallel.json %t.default.out.reassign.csv
-RUN: sed 's/start=0x100/start=0x100:debug=no:output=none/' %t.default.yaml > %t.disabled.yaml
+RUN: sed 's/seq_start=0x100/seq_start=0x100:debug=no:output_format=none/' %t.default.yaml > %t.disabled.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.default.out --plugin-config %t.disabled.yaml
 RUN: cmp %t.parallel.json %t.default.out.reassign.debug.json
 RUN: cmp %t.parallel.json %t.default.out.reassign.csv
 RUN: rm -f %t.default.out.reassign.debug.json %t.default.out.reassign.csv
 # Missing sections and sections without object symbols create no artifacts.
-RUN: sed 's/section=.reassign_a,.reassign_b/section=.not_present,.text/;s/:debug=yes/:debug=yes:output=csv/' %t.debug.yaml > %t.missing.yaml
+RUN: sed 's/section=.reassign_a,.reassign_b/section=.not_present,.text/;s/:debug=yes/:debug=yes:output_format=csv/' %t.debug.yaml > %t.missing.yaml
 RUN: %link %linkopts %t.o -T %p/Inputs/script.t -e main -o %t.missing.out --plugin-config %t.missing.yaml
 RUN: %python -c "from pathlib import Path; assert not list(Path('%t.missing.out').parent.glob(Path('%t.missing.out').name+'.reassign.*'))"
 # CSV escaping preserves commas, quotes, CR/LF; debug retains the trailing NUL.

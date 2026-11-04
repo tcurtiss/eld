@@ -35,7 +35,7 @@ config.write_text('''GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.dedup:hash=sequential:start=0x12345678
+    Options: section=.dedup:hash=seq:seq_start=0x12345678
 ''')
 
 for mode, flags in (
