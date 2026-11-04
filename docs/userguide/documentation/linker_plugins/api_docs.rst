@@ -24,8 +24,11 @@ change the replacement at runtime.
 Register the relevant relocation types with ``registerReloc`` in
 ``LinkerPluginConfig::Init``. Inspect each ``Use`` in ``RelocCallBack`` and call
 ``claimUse`` for the current ``Use`` on that callback's thread. A saved ``Use``
-cannot be claimed later or from a worker thread. Callbacks may run concurrently,
-so synchronize any plugin containers used to collect claimed uses.
+cannot be claimed later or from a plugin worker thread. ELD runs each
+callback immediately before scanning that relocation. When parallel scanning
+is enabled, callbacks for different input files may run concurrently; plugins
+must synchronize their shared state. The API does not permit moving a claim
+to a different thread.
 
 Claims are supported during final links for executables, shared libraries,
 and PIEs. The source must have a complete relocation storage field with a
@@ -37,28 +40,44 @@ Check each API result and report errors through the plugin diagnostic framework.
 For each claimed use that survives into the output, the owning plugin must
 supply final bytes with ``setTargetDataForUse`` before relocation application.
 For an output-section iterator this can be done in its ``AfterLayout`` run,
-when final addresses are available. The first accepted replacement is retained;
-later calls do not overwrite it, and another plugin cannot supply the replacement
-for a claimed use. Replacement calls are thread-safe, including layout-map
-bookkeeping; workers launched by an overridden plugin callback must finish
-before that callback returns. Missing replacement data and NOLOAD/NOBITS output
-storage are diagnosed before relocation application.
+when final addresses are available. The first accepted replacement belongs to
+its writing plugin, even without a claim. Later successful calls by that plugin
+update the replacement data, and the last accepted value is used. Writes by
+another plugin are rejected, even when the proposed bytes are identical.
+Conflicting claims and writes cause a link error even if the plugin ignores
+the returned error: ELD diagnoses unreported conflicts before relocation
+application. Check and report each API result so errors can be diagnosed
+earlier. Replacement calls are thread-safe, including layout-map bookkeeping;
+workers launched by an overridden plugin callback must finish before that
+callback returns. Missing data and NOLOAD/NOBITS output storage are diagnosed
+before relocation application.
 
 ELD skips normal target scanning and application for claimed uses. Those uses
 do not reserve GOT/PLT entries or dynamic relocations and are omitted from
 ``--emit-relocs``. Other references to the same symbol retain normal processing
 and may still allocate those entries. Existing garbage-collection dependencies
-and the use's symbol, type, and addend are retained. Hexagon also skips trampoline
-creation and tail-jump deletion for claimed branches. The plugin must validate
-the instruction sequence, encode complete instruction or data bytes within the
-original storage width, and handle any other target relaxation that affects its
-rewrite. Claiming does not validate the semantic correctness of those bytes.
+and the use's symbol, type, and addend are retained. String pools may still be
+merged, but claimed uses are not retargeted by that merging.
+ELD does not merge constant pools.
+Hexagon also skips trampoline creation and tail-jump relaxation for claimed
+branches. The plugin must validate the instruction sequence, encode complete
+instruction or data bytes within the original storage width, and handle any
+other target relaxation that affects its rewrite. Claiming does not validate
+the semantic correctness of those bytes.
 
 ``setTargetDataForUse`` alone replaces final storage bytes but does not suppress
 normal scanning or runtime relocation allocation. ``setSymbolAddress`` changes
 the symbol to an absolute value but does not claim its references. A plugin must
 identify the references it intends to rewrite, including references expressed
 as a section symbol plus an addend, and claim each relevant use explicitly.
+
+For example, a string-ID plugin can resolve a section-symbol-plus-addend use to
+its original containing object symbol, check local binding, and claim the use in
+the callback. After layout, it assigns the object's absolute ID using
+``setSymbolAddress`` (introduced in `PR #1751 <https://github.com/qualcomm/eld/pull/1751>`_)
+and submits fully encoded instruction or pointer bytes with ``setTargetDataForUse``.
+Section-relative attribution, instruction rewriting, and preservation of genuine
+interior offsets remain plugin policy, not target-specific behavior in ELD.
 
 ``LinkerWrapper::isSymbolPreemptible(Symbol S)`` queries the target backend's
 interposition rules for the current symbol and link configuration. It accounts
@@ -73,12 +92,15 @@ Relocation replacement data
 
 ``LinkerWrapper::setTargetDataForUse(Use &U, uint64_t Data)`` supplies complete
 instruction or data bytes for a relocation's storage field, not an unencoded
-operand. The first value supplied for a use is retained; subsequent successful
-calls do not overwrite it. A null use returns an error.
+operand. The first accepted replacement belongs to its writing plugin. Later
+successful calls by that plugin update the replacement; writes by a different
+plugin return an error and cause a link error even if ignored. A null use
+returns an error.
 
 Plugins may submit replacement data from worker threads, including when a
-layout map is enabled. Replacement insertion, allocation of the corresponding
-map operation, and updates to map bookkeeping are serialized together.
+layout map is enabled. Ownership checks, replacement updates, allocation of
+the corresponding map operation, and updates to map bookkeeping are serialized
+together. Failed writes do not record a successful map operation.
 All worker tasks launched by an overridden plugin callback must finish before
 that callback returns, for example ``OutputSectionIteratorPlugin::Run()``
 during ``AfterLayout``. This does not require all tasks to finish before an

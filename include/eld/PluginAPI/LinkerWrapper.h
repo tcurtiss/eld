@@ -477,6 +477,8 @@ public:
   /// Take responsibility for the final bytes of U. Only valid for the Use
   /// currently being delivered to this plugin's RelocCallBack, on the callback
   /// thread, during a final link (executable, shared library, or PIE).
+  /// ELD callbacks run before each relocation is scanned and may run
+  /// concurrently for different input files when parallel scanning is enabled.
   /// The source must contain a complete, nonzero-width relocation storage field
   /// of at most sizeof(uint64_t) bytes in a PROGBITS chunk. Partial links,
   /// duplicate claims, and claims after replacement data was supplied are
@@ -488,7 +490,8 @@ public:
   /// Uses are omitted from --emit-relocs because their final bytes no longer
   /// require relocation. The plugin must validate the instruction pattern and
   /// account for target relaxation. This claims only U; setSymbolAddress does
-  /// not implicitly claim any Uses.
+  /// not implicitly claim any Uses. Conflicting claims cause a link error even
+  /// if the returned error is ignored.
   eld::Expected<void> claimUse(Use U);
 
   /// Return whether S can be interposed under the current link configuration.
@@ -630,18 +633,20 @@ public:
   /// Return the value of the relocation target
   eld::Expected<void> getTargetDataForUse(Use &U, uint64_t &Data) const;
 
-  /// Supply the final relocation storage bytes as a uint64_t value. The first
-  /// accepted value for U is retained; later values do not overwrite it.
-  /// For a claimed Use, only the owning plugin may supply replacement data,
-  /// before relocation application. Without claimUse, normal relocation
+  /// Supply the final relocation storage bytes as a uint64_t value. Later
+  /// successful calls by the same plugin update U's replacement data; the last
+  /// accepted value is used. A different plugin's write is rejected, even
+  /// without a claim, and causes a link error even if the returned error is
+  /// ignored. For a claimed Use, only the owning plugin may supply replacement
+  /// data, before relocation application. Without claimUse, normal relocation
   /// scanning and GOT/PLT/dynamic relocation allocation still occur.
   /// The value contains complete instruction/data bytes for the storage field,
   /// not an unencoded operand for the linker to apply. Calls are thread-safe,
-  /// including layout-map bookkeeping. All worker tasks
-  /// launched by an overridden plugin callback must finish before that
-  /// callback returns, for example OutputSectionIteratorPlugin::Run() during
-  /// AfterLayout. This guarantee does not extend to other plugin APIs or
-  /// concurrent layout-map reads.
+  /// including layout-map bookkeeping. All worker tasks launched by an
+  /// overridden plugin callback must finish before that callback returns, for
+  /// example OutputSectionIteratorPlugin::Run() during AfterLayout. This
+  /// guarantee does not extend to other plugin APIs or concurrent layout-map
+  /// reads.
   eld::Expected<void> setTargetDataForUse(Use &U, uint64_t Data);
 
   /// Returns the 32-bit checksum of the image layout if this function is

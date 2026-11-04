@@ -710,9 +710,16 @@ private:
   // ----------------- Use/Def support for linker script --------------
   std::unordered_set<std::string> VisitedAssignments;
   // ----------------- Relocation Data set by plugins ------------------
-  std::unordered_map<const eld::Relocation *, uint64_t> RelocationData;
+  struct RelocationDataEntry {
+    uint64_t Data;
+    const plugin::LinkerWrapper *Owner;
+  };
+  std::unordered_map<const eld::Relocation *, RelocationDataEntry>
+      RelocationData;
   llvm::DenseMap<const eld::Relocation *, const plugin::LinkerWrapper *>
       PluginRelocations;
+  bool HasPluginRelocationClaimConflict = false;
+  bool HasPluginRelocationDataConflict = false;
   // ----------------- Section references set by plugins --------------
   ReferencedSymbols BitcodeReferencedSymbols;
   // ----------------- Mutex guard -----------------------------------

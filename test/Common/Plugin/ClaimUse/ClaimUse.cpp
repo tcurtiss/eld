@@ -37,6 +37,23 @@ public:
     if (U.getName() != "data")
       return;
     std::lock_guard<std::mutex> Guard(Mutex);
+    if (Mode == "unclaimed-data" || Mode == "claimed-data") {
+      if (Mode == "claimed-data") {
+        auto Result = getLinker()->claimUse(U);
+        if (!Result) {
+          getLinker()->reportDiagEntry(std::move(Result.error()));
+          return;
+        }
+      }
+      // A repeated write by the same plugin succeeds and updates its value.
+      // Both values intentionally differ from a competing writer's.
+      for (uint64_t Data : {0x12345678U, 0x87654321U}) {
+        auto Result = getLinker()->setTargetDataForUse(U, Data);
+        if (!Result)
+          getLinker()->reportDiagEntry(std::move(Result.error()));
+      }
+      return;
+    }
     if (Mode == "other-use") {
       if (Previous) {
         auto Result = getLinker()->claimUse(Previous);
