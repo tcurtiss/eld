@@ -86,6 +86,7 @@ than one value, its value list remains comma-delimited:
 | `section=<name>[,<name>...]` | required | Output sections to process. |
 | `hash=md5\|sha1\|seq` | `md5` | Address assignment mode. |
 | `seq_start=<value>` | `0` | Starting address for `hash=seq`; accepts a complete unsigned 32-bit decimal, hexadecimal, or octal integer. |
+| `exclude_range=<low>-<high>[,<low>-<high>...]` | none | Inclusive ranges of assigned IDs to reserve. Bounds are unsigned 32-bit decimal or hexadecimal values, with `low <= high`. Sequential IDs skip ranges; MD5/SHA1 try overlapping 32-bit digest slices in 8-bit steps. |
 | `output_format=csv\|json[,csv\|json...]` or `output_format=none` | `none` | Selects one or both mapping formats, e.g. `output_format=csv,json`. Writes one `.<output_suffix>.csv` and/or `.<output_suffix>.json` per image containing all modified sections. `none` disables mapping output. |
 | `output_suffix=<name>` | `reassign` | Filename component used for every mapping/debug output: `<output-file>.<output_suffix>.csv`, `.json`, or `.debug.json`. |
 | `gzip=yes\|no` | `no` | Compresses every generated mapping and debug file and appends `.gz`; does not create the uncompressed files. |
@@ -96,10 +97,23 @@ Example plugin configuration:
 
 ```yaml
 GlobalPlugins:
-  - Type: OutputSectionIteratorPlugin
+  - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
     Options: section=.dedup:hash=md5:output_format=csv,json:gzip=yes:debug=yes
+```
+
+ELD plugin configuration files are YAML and accept `#` comments on their own
+lines or after a value. Keep comments outside the quoted `Options` string;
+the plugin receives it as a single colon-delimited string, not individual YAML
+option keys. Both in-tree and standalone builds copy the fully annotated
+[`ReassignSectionAddresses.yaml`](ReassignSectionAddresses.yaml) beside the
+built plugin library. Copy it elsewhere before customizing it, since rebuilding
+refreshes the build-directory copy. Replace its `.dedup` section with your
+linker-script output section name, and load it with:
+
+```sh
+ld.eld ... -L <plugin-directory> --plugin-config <your-config.yaml>
 ```
 
 In sequential mode (`hash=seq`), identical symbol contents share one address
@@ -114,11 +128,65 @@ are ignored, with details printed when plugin tracing is enabled.
 
 MD5 and SHA1 hash the full symbol bytes, including a trailing NUL. Sequential
 deduplication omits one trailing NUL, as the mapping string does, and its 32-bit
-counter wraps after `0xffffffff`. Truncated 32-bit hashes can collide for
-different contents; no collision detection is performed. Mapping deduplication
-keeps the first string at each assigned address within each section, so hashes
-do not guarantee globally unique IDs. Sequential IDs are unique for distinct
-normalized contents until the counter wraps.
+counter wraps after `0xffffffff`, skipping excluded ranges after wrapping too.
+Every mode checks assigned IDs across all selected sections in this plugin
+invocation. Identical contents may share an ID. A hash collision with different
+original symbol bytes tries higher-order slices of the same digest, while
+sequential reuse for different normalized contents fails the link. Mapping
+deduplication therefore never hides distinct-content ID collisions. Cleaning
+rendered strings does not affect identity or address selection.
+
+### Reserved ID ranges
+
+For example:
+
+```text
+section=.dedup:hash=md5:exclude_range=0x1234-0x4567,100-200,0xffff0000-0xfffffff0
+```
+
+Both endpoints are excluded; a single value can be reserved with `100-100`.
+Decimal bounds with leading zeros remain decimal, and hexadecimal bounds accept
+`0x` or `0X`. Bounds may have surrounding whitespace. Empty, malformed, reversed,
+negative, or greater-than-32-bit bounds fail the link. Lists can be unsorted;
+overlapping and adjacent ranges are merged. Repeated `exclude_range=` keys use
+the last list. A list covering all `0` through `0xffffffff` values is an error.
+
+With `hash=seq`, the next distinct content gets the next non-excluded ID. If the
+counter is inside a range, it jumps directly to one past the inclusive high
+bound, wrapping to zero when necessary. Identical normalized contents still
+reuse their first assigned ID across all selected sections. Exclusions reduce
+the number of available distinct sequential IDs. Wrapping is permitted while
+the next non-excluded ID has not yet been assigned; trying to reuse an assigned
+ID for new content fails the link. Repeated contents remain valid after wrap.
+
+MD5/SHA1 first try their existing lower-32-bit ID. If excluded or assigned to
+different original bytes, the plugin slides a 32-bit window toward higher-order
+bits in **8-bit increments**, without rehashing the contents:
+
+```text
+candidate_i = (digest_value >> (8 * i)) & 0xffffffff
+```
+
+For MD5, the 16 digest bytes are interpreted little-endian: the windows cover
+bytes `[0:4]`, `[1:5]`, ... `[12:16]`, each decoded little-endian. This gives
+13 candidate positions at bit offsets 0, 8, ... 96. For SHA1, the 20 digest
+bytes are interpreted big-endian: windows cover `[16:20]`, `[15:19]`, ... `[0:4]`,
+each decoded big-endian. This gives 17 positions at offsets 0, 8, ... 128.
+Windows overlap; repeated candidate values are possible. No window wraps around
+or reads beyond the digest. This preserves existing first-choice IDs when they
+are neither excluded nor conflicting. If every slice is
+excluded or belongs to different contents, the link fails with a symbol-specific
+diagnostic rather than inventing an ID or silently accepting a collision.
+Identical bytes reuse the same chosen ID, including after fallback. Selection
+is deterministic in final section/rule/chunk/symbol order and independent of
+thread count. When distinct contents collide, whichever is encountered first
+keeps the earlier usable slice, so changing input or section order can change
+collision-resolved IDs. The scope is one plugin invocation, not separate images
+or independently configured plugin instances.
+
+Exclusions apply to assigned symbol IDs, not to an interior-reference offset
+subsequently added to an ID. Rewritten references and CSV/JSON/debug outputs all
+use the selected ID; file formats and output naming are unchanged.
 
 ### Combined CSV and JSON mappings
 
@@ -283,7 +351,12 @@ also borrows content keys. Hash jobs share one lazily created pool at ELD's
 configured capacity. Work is batched (up to 32 symbols per batch); fewer than
 256 symbols totaling less than 64 KiB are hashed serially to avoid scheduling
 overhead. These are conservative thresholds, not a guarantee of speedup for
-every image or host.
+every image or host. Hash workers retain the full digest words for the current
+section; global collision checks and ID reservations run serially in assignment
+order, without rehashing contents or adding worker locks. The ID-to-content
+registry borrows original byte views, and sequential mode also retains a
+content-to-ID index. Both registries and their buckets are released once all
+sections are assigned, before reference rewriting and output.
 
 Relocation callbacks discard non-runtime sources and unselected targets before
 initializing the target inventory, after symbol resolution and GC. Source-use
@@ -310,6 +383,20 @@ are unchanged by thread count.
 
 `ReassignHashBoundaries.test` checks binary contents, an empty symbol, MD5/SHA1
 padding boundaries and large symbols against Python's hashes.
+`ReassignExcludeRanges.test` checks range syntax, inclusive endpoints,
+normalization, every byte-shifted slice and exhaustion, sequential
+skips/wraparound, deduplication, symbol values and mapping/debug consistency.
+`ReassignExcludeRangesThreading.test` forces two-slice hash fallback across
+1,024 symbols and verifies rewritten references and all output formats with
+serial/parallel hashing and gzip.
+`ReassignCollisions.test` uses real MD5/SHA1 collisions at word/byte boundaries
+and the final slice to check
+within/cross-section fallback, excluded alternatives, duplicate reuse, reversed
+section order, disabled outputs and exhaustion. It also checks sequential wrap
+with unused IDs, duplicate reuse after wrap and cross-section exhaustion.
+`ReassignCollisionsThreading.test` checks real lower-word collisions and repeated
+contents across input files/sections, including rewritten references, gzip and
+all outputs under serial/parallel hashing.
 Binary CSV checks compare exact encoded records rather than using
 `csv.reader`, so embedded NUL bytes remain covered on Python 3.10 and older.
 `ReassignThreading.test` uses 16 independent inputs, repeated local names,
@@ -409,7 +496,8 @@ assembly), with three additional plugin-free relaxation control links:
   Stripped code is compared with the independently validated unstripped image.
 - Static PIE (`--static --pie --no-dynamic-linker`) and a PIE mixing PIC and
   PIE objects. Sequential IDs are allowed to change with input order, while
-  their references must remain correct; content hashes remain stable.
+  their references must remain correct; hash IDs remain stable when no
+  collision changes digest-slice selection.
 - `--relax` and section-selective relaxation together with address rewriting.
   A plugin-free control checks whether ELD supports instruction-deleting
   relaxation and requires the same deletion and adjusted fixups when available;

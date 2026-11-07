@@ -5,6 +5,7 @@
 #define ELD_PLUGIN_PORTABLE_H
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -372,7 +373,8 @@ inline void hashBlocks(ArrayRef<uint8_t> Input, bool LittleEndian, F &&Block) {
     Block(Tail + 64);
 }
 
-inline uint32_t md5Lower32(ArrayRef<uint8_t> Input) {
+// MD5 digest words in little-endian order, from lower to higher bits.
+inline std::array<uint32_t, 4> md5Words(ArrayRef<uint8_t> Input) {
   uint32_t A0 = 0x67452301, B0 = 0xefcdab89, C0 = 0x98badcfe, D0 = 0x10325476;
   static const uint32_t S[64] = {
       7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
@@ -423,12 +425,17 @@ inline uint32_t md5Lower32(ArrayRef<uint8_t> Input) {
     C0 += C;
     D0 += D;
   });
-  // LLVM's MD5Result::low() reads the first eight digest bytes as a
-  // little-endian integer, so its lower 32 bits are the first digest word.
-  return A0;
+  return {A0, B0, C0, D0};
 }
 
-inline uint32_t sha1Lower32(ArrayRef<uint8_t> Input) {
+inline uint32_t md5Lower32(ArrayRef<uint8_t> Input) {
+  // LLVM's MD5Result::low() reads the first eight digest bytes as a
+  // little-endian integer, so its lower 32 bits are the first digest word.
+  return md5Words(Input)[0];
+}
+
+// SHA1 digest words in big-endian order, from higher to lower bits.
+inline std::array<uint32_t, 5> sha1Words(ArrayRef<uint8_t> Input) {
   uint32_t H0 = 0x67452301, H1 = 0xefcdab89, H2 = 0x98badcfe, H3 = 0x10325476,
            H4 = 0xc3d2e1f0;
   hashBlocks(Input, false, [&](const uint8_t *Data) {
@@ -467,7 +474,11 @@ inline uint32_t sha1Lower32(ArrayRef<uint8_t> Input) {
     H3 += D;
     H4 += E;
   });
-  return H4;
+  return {H0, H1, H2, H3, H4};
+}
+
+inline uint32_t sha1Lower32(ArrayRef<uint8_t> Input) {
+  return sha1Words(Input)[4];
 }
 
 } // namespace eld::plugin::portable

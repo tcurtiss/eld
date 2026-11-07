@@ -1,0 +1,7 @@
+# Part of the eld Project, under the BSD License
+# See https://github.com/qualcomm/eld/LICENSE.txt for license information.
+# SPDX-License-Identifier: BSD-3-Clause
+# REQUIRES: hexagon, llvm-readelf
+# Exclusions must affect symbol IDs, rewritten references, CSV/JSON and debug
+# identically with serial/parallel hashing and gzip. Force two-slice hash fallback.
+RUN: %python %p/Inputs/check_threading.py --compiler %clang --compiler-flags="%clangopts" --link %link --readelf %readelf --references --exclude-ranges --work %t

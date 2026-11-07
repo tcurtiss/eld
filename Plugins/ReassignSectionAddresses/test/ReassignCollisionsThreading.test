@@ -1,0 +1,7 @@
+# Part of the eld Project, under the BSD License
+# See https://github.com/qualcomm/eld/LICENSE.txt for license information.
+# SPDX-License-Identifier: BSD-3-Clause
+# REQUIRES: hexagon, llvm-readelf
+# Real collisions across sections, late duplicate reuse, rewritten references,
+# all output formats and gzip must match across thread counts.
+RUN: %python %p/Inputs/check_threading.py --compiler %clang --compiler-flags="%clangopts" --link %link --readelf %readelf --references --collisions --work %t

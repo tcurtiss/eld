@@ -1,0 +1,6 @@
+# Part of the eld Project, under the BSD License
+# See https://github.com/qualcomm/eld/LICENSE.txt for license information.
+# SPDX-License-Identifier: BSD-3-Clause
+# REQUIRES: llvm-readelf
+# Range syntax, inclusive bounds, digest-slice fallback, wraparound and outputs.
+RUN: %python %p/Inputs/check_exclude_ranges.py --compiler %clang --compiler-flags="%clangopts" --link %link --readelf %readelf --work %t

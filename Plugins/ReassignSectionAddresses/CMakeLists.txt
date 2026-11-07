@@ -34,6 +34,20 @@ elseif(NOT CYGWIN AND LLVM_ENABLE_PIC)
   set(BUILD_SHARED_LIBS ${bsl})
 endif()
 
+if(TARGET ReassignSectionAddresses)
+  # Keep the example beside the plugin, including when only the config changes.
+  add_custom_target(ReassignSectionAddressesConfig
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      "$<TARGET_FILE_DIR:ReassignSectionAddresses>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/ReassignSectionAddresses.yaml"
+      "$<TARGET_FILE_DIR:ReassignSectionAddresses>/ReassignSectionAddresses.yaml"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ReassignSectionAddresses.yaml"
+    COMMENT "Copying annotated ReassignSectionAddresses configuration"
+    VERBATIM)
+  add_dependencies(ReassignSectionAddresses ReassignSectionAddressesConfig)
+endif()
+
 if(NOT ELD_STANDALONE)
   eld_register_plugin_tests(${CMAKE_CURRENT_SOURCE_DIR}/test
                             ReassignSectionAddresses)

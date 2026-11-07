@@ -1,0 +1,68 @@
+# Part of the eld Project, under the BSD License
+# See https://github.com/qualcomm/eld/LICENSE.txt for license information.
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Annotated example, copied beside the built ReassignSectionAddresses library.
+# Copy and customize this file; rebuilding refreshes the build-directory copy.
+# Usage: ld.eld ... -L <plugin-directory> --plugin-config <your-config.yaml>
+# The linker script must place the selected sections in DSECT, COPY, INFO, or
+# OVERLAY output sections. Assigned addresses are IDs, not dereferenceable data.
+#
+# YAML supports whole-line and inline # comments outside quoted strings.
+# Options is ONE colon-delimited string, not separate YAML keys. Do not put
+# comments inside that string, or insert whitespace around its keys/separators.
+GlobalPlugins:
+  - Type: OutputSectionIterator
+    Name: ReassignSectionAddresses
+    Library: ReassignSectionAddresses # Resolved using the plugin library path.
+
+    # section=<name>[,<name>...] (required): output sections to process.
+    # Replace .dedup with your section name, e.g. QSR_STR_SO. Repeated section=
+    # fields append names; duplicate names are processed once; empty names fail.
+    #
+    # hash=md5|sha1|seq (default md5): assign 32-bit IDs from symbol contents.
+    # Identical contents share IDs across all selected sections in this instance.
+    # MD5/SHA1 hash the original bytes, including a trailing NUL; seq ignores
+    # one trailing NUL. Distinct-content collisions and exclusions try successive
+    # 32-bit digest slices in 8-bit steps (13 MD5 positions, 17 SHA1 positions).
+    # If no usable slice remains, the link fails. Input order can affect fallback.
+    #
+    # seq_start=<value> (default 0): first ID for hash=seq; ignored by hash modes.
+    # Unsigned 32-bit decimal, hexadecimal, or octal, e.g. 256, 0x100, or 0400.
+    # Sequential IDs increment and wrap, but reuse for different contents fails.
+    #
+    # exclude_range=<low>-<high>[,<low>-<high>...] (default no exclusions):
+    # inclusive unsigned 32-bit decimal/hexadecimal bounds; require low <= high.
+    # Example: exclude_range=0x1234-0x4567,100-200,0xffff0000-0xfffffff0
+    # Overlapping/adjacent ranges merge. Invalid bounds or full-space exclusion
+    # fail the link. Sequential IDs jump past ranges; hashes try the next slice.
+    # Exclusions apply to assigned IDs, not an interior-reference offset added
+    # later. Omit this field when no ranges should be reserved.
+    #
+    # output_format=none|csv|json|csv,json (default none): mapping output formats.
+    # One file per format per image, containing every selected section. CSV IDs
+    # are 0xXXXXXXXX; JSON IDs are decimal numbers. This example enables both.
+    #
+    # output_suffix=<name> (default reassign): output filename component.
+    # Files are <linker-output>.<output_suffix>.csv, .json, and .debug.json.
+    # Keep it nonempty, without path separators or control bytes.
+    #
+    # gzip=yes|no (default no): compress ALL enabled output files; append .gz.
+    # Uncompressed copies are not generated when gzip=yes.
+    #
+    # debug=yes|no (default no): one JSON file with per-section symbol names,
+    # original/assigned addresses, raw bytes, and relocation provenance.
+    # Independent of output_format and linker tracing; gzip applies here too.
+    #
+    # clean_strings=yes|no (default no): for mapping strings only, keep printable
+    # ASCII and tabs, remove CR/LF and other control/non-ASCII bytes, and trim
+    # trailing whitespace. Internal tab runs are NOT collapsed. Hashing, content
+    # identity, and debug raw bytes are unaffected.
+    #
+    # Except section=, repeated keys use the last value. Unknown keys/malformed
+    # fields are ignored; unknown hash names select MD5. Linker plugin tracing
+    # (--trace=plugin) reports these cases; it is not another plugin option.
+    Options: "section=.dedup:hash=md5:seq_start=0:output_format=csv,json:output_suffix=reassign:gzip=no:debug=no:clean_strings=no" # Edit this string.
+
+    # Alternative with reserved IDs and compressed mapping/debug outputs:
+    # Options: "section=QSR_STR_SO:hash=sha1:exclude_range=0x1234-0x4567,100-200,0xffff0000-0xfffffff0:output_format=csv,json:output_suffix=reassign:gzip=yes:debug=yes:clean_strings=yes"

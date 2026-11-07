@@ -19,6 +19,8 @@ parser.add_argument("--compiler-flags", default="")
 parser.add_argument("--link", required=True)
 parser.add_argument("--readelf")
 parser.add_argument("--references", action="store_true")
+parser.add_argument("--exclude-ranges", action="store_true")
+parser.add_argument("--collisions", action="store_true")
 parser.add_argument("--work", type=Path, required=True)
 args = parser.parse_args()
 work = args.work.resolve()
@@ -32,6 +34,15 @@ lengths = (0, 1, 2, 3, 7, 31, 55, 56, 57, 63, 64, 65, 119, 120, 121,
 
 def content(file_index, index):
     if args.references:
+        if args.collisions and file_index in (0, 15):
+            # Real lower-word MD5/SHA1 collisions, in different sections. Repeat
+            # them in the last input to check reuse of a collision-resolved ID.
+            collision_contents = {
+                1: b"md5-collision-0-32678\0", 2: b"md5-collision-0-93183\0",
+                3: b"sha1-collision-0-33489\0", 4: b"sha1-collision-0-48140\0",
+            }
+            if index in collision_contents:
+                return collision_contents[index]
         return (b"same\0" if index % 8 == 0 else
                 ("string-{}-{}\0".format(file_index, index)).encode())
     return bytes((offset * 37 + 1) % 256 for offset in range(lengths[index]))
@@ -102,14 +113,30 @@ image = work / "image.out"
 config = work / "plugins.yaml"
 
 for mode in ("md5", "sha1", "seq"):
+    exclusions = set()
+    ranges = []
+    if args.exclude_ranges:
+        if mode == "seq":
+            ranges = [(0x100, 0x102), (0x180, 0x188), (0x200, 0x210)]
+        else:
+            # Force use of higher-order slices for every string, not just one
+            # fixture, in both serial and parallel hash jobs.
+            for value in expected.values():
+                digest = getattr(hashlib, mode)(value).digest()
+                for i in ((0, 1) if mode == "md5" else (16, 15)):
+                    exclusions.add(int.from_bytes(
+                        digest[i:i + 4], "little" if mode == "md5" else "big"))
+            ranges = [(value, value) for value in sorted(exclusions)]
+    range_option = (":exclude_range=" + ",".join("0x{:x}-0x{:x}".format(low, high)
+                    for low, high in ranges)) if ranges else ""
     baseline = None
     for compressed in ((False, True) if args.references else (False,)):
         config.write_text("""GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.reassign_a,.reassign_b:hash={}:seq_start=0x100:output_format=csv,json:debug=yes:gzip={}
-""".format(mode, "yes" if compressed else "no"))
+    Options: section=.reassign_a,.reassign_b:hash={}:seq_start=0x100:output_format=csv,json:debug=yes:gzip={}{}
+""".format(mode, "yes" if compressed else "no", range_option))
         counts = (0, 1, 2, 4, 8) if args.references else (0, 2, 8)
         for count in counts:
             flags = ["--thread-count", str(count)] if count else ["--no-threads"]
@@ -129,6 +156,8 @@ for mode in ("md5", "sha1", "seq"):
             expected_rows = [["section", "address", "string"]]
             expected_sections = []
             sequential = {}
+            assigned_contents = {}
+            next_sequential = 0x100
             observed = {}
             reference_count = 0
             for section in debug["sections"]:
@@ -141,12 +170,24 @@ for mode in ("md5", "sha1", "seq"):
                     observed[key] = value
                     assert bytes.fromhex(symbol["raw_bytes"]) == value, key
                     text = value[:-1] if value.endswith(b"\0") else value
-                    if mode == "md5":
-                        address = int.from_bytes(hashlib.md5(value).digest()[:4], "little")
-                    elif mode == "sha1":
-                        address = int.from_bytes(hashlib.sha1(value).digest()[-4:], "big")
+                    if mode != "seq":
+                        digest = getattr(hashlib, mode)(value).digest()
+                        offsets = (range(13) if mode == "md5" else
+                                   range(16, -1, -1))
+                        words = [int.from_bytes(digest[i:i + 4],
+                                 "little" if mode == "md5" else "big") for i in offsets]
+                        address = next(word for word in words if word not in exclusions and
+                                       (word not in assigned_contents or
+                                        assigned_contents[word] == value))
+                        assigned_contents.setdefault(address, value)
                     else:
-                        address = sequential.setdefault(text, 0x100 + len(sequential))
+                        if text not in sequential:
+                            for low, high in ranges:
+                                if low <= next_sequential <= high:
+                                    next_sequential = high + 1
+                            sequential[text] = next_sequential
+                            next_sequential += 1
+                        address = sequential[text]
                     assert symbol["assigned_address"] == address, (mode, key, address, symbol)
                     reference_count += len(symbol["relocations"])
                     if address not in seen:
@@ -174,6 +215,34 @@ for mode in ("md5", "sha1", "seq"):
                                 symbol["assigned_address"] + reloc["target"]["interior_offset"]), reloc
             else:
                 assert reference_count == 0
+
+if args.exclude_ranges:
+    # Exhaustion must also fail cleanly after all parallel workers have joined,
+    # with no partially written mapping/debug artifacts.
+    first_content = next(iter(expected.values()))
+    for mode in ("md5", "sha1"):
+        digest = getattr(hashlib, mode)(first_content).digest()
+        words = [int.from_bytes(digest[i:i + 4],
+                 "little" if mode == "md5" else "big")
+                 for i in range(len(digest) - 3)]
+        excluded_values = ",".join("0x{0:x}-0x{0:x}".format(word) for word in words)
+        config.write_text("""GlobalPlugins:
+  - Type: OutputSectionIterator
+    Name: ReassignSectionAddresses
+    Library: ReassignSectionAddresses
+    Options: section=.reassign_a,.reassign_b:hash={}:exclude_range={}:output_format=csv,json:debug=yes
+""".format(mode, excluded_values))
+        failed_image = work / (mode + "-excluded.out")
+        for count in (0, 8):
+            flags = ["--thread-count", str(count)] if count else ["--no-threads"]
+            command = [*shlex.split(args.link), *objects, "-T", script, "-e", "entry_0",
+                       "--plugin-config", config, "-o", failed_image, *flags]
+            result = subprocess.run([str(arg) for arg in command], cwd=work,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            assert result.returncode != 0, (mode, count)
+            assert "all {} 32-bit digest slices are excluded".format(mode) in result.stderr, result.stderr
+            for suffix in ("csv", "json", "debug.json"):
+                assert not Path(str(failed_image) + ".reassign." + suffix).exists(), suffix
 
 # All writers must finish even when two files fail. Diagnostics use option
 # order, while the successful debug writer must still produce a complete file.
