@@ -126,7 +126,7 @@ for mode in ("md5", "sha1", "seq"):
                 for i in ((0, 1) if mode == "md5" else (16, 15)):
                     exclusions.add(int.from_bytes(
                         digest[i:i + 4], "little" if mode == "md5" else "big"))
-            ranges = [(value, value) for value in sorted(exclusions)]
+            ranges = [(value, value + 1) for value in sorted(exclusions)]
     range_option = (":exclude_range=" + ",".join("0x{:x}-0x{:x}".format(low, high)
                     for low, high in ranges)) if ranges else ""
     baseline = None
@@ -182,9 +182,9 @@ for mode in ("md5", "sha1", "seq"):
                         assigned_contents.setdefault(address, value)
                     else:
                         if text not in sequential:
-                            for low, high in ranges:
-                                if low <= next_sequential <= high:
-                                    next_sequential = high + 1
+                            for low, end in ranges:
+                                if low <= next_sequential < end:
+                                    next_sequential = end
                             sequential[text] = next_sequential
                             next_sequential += 1
                         address = sequential[text]
@@ -225,7 +225,7 @@ if args.exclude_ranges:
         words = [int.from_bytes(digest[i:i + 4],
                  "little" if mode == "md5" else "big")
                  for i in range(len(digest) - 3)]
-        excluded_values = ",".join("0x{0:x}-0x{0:x}".format(word) for word in words)
+        excluded_values = ",".join("0x{:x}-0x{:x}".format(word, word + 1) for word in words)
         config.write_text("""GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses

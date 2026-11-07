@@ -11,8 +11,8 @@
 // content. Alternatively, hash=seq assigns increasing integer values
 // starting at a configurable constant, one per unique symbol content, in
 // the order symbols are encountered, across all target sections combined.
-// exclude_range= reserves inclusive 32-bit ranges. Hash modes try successive
-// 32-bit digest slices in 8-bit steps; sequential mode jumps past excluded
+// exclude_range= reserves half-open 32-bit ID ranges [start, end). Hash modes
+// try successive 32-bit digest slices in 8-bit steps; sequential mode skips
 // ranges. Each target section must be declared in the linker script with the
 // DSECT (or COPY/INFO/OVERLAY) output section type, since its address
 // range is bookkeeping only and is never actually loaded: these types
@@ -127,11 +127,11 @@ public:
   //   seq_start=<value> Starting value for hash=seq, parsed as a C
   //                     integer literal (e.g. "0x1000" or "4096"); default 0.
   //                     Ignored for hash=md5/sha1.
-  //   exclude_range=<low>-<high>[,<low>-<high>]*
-  //                     Inclusive unsigned 32-bit decimal/hexadecimal ranges,
-  //                     with low <= high. Hashes try 32-bit slices in 8-bit
-  //                     steps until one is allowed; sequential IDs skip the
-  //                     ranges.
+  //   exclude_range=<start>-<end>[,<start>-<end>]*
+  //                     Decimal/hexadecimal ranges with start <= ID < end,
+  //                     0 <= start < end <= 0x100000000. Hashes try 32-bit
+  //                     slices in 8-bit steps until allowed; sequential IDs
+  //                     skip ranges.
   //   output_format=<csv|json>[,<csv|json>]* (or none)
   //                     Write the selected mapping formats, one file each
   //                     containing all modified sections. Default none;
@@ -232,8 +232,8 @@ public:
           if (!parseExcludedRanges(Value)) {
             EC = 1;
             LastError = "exclude_range= must be a comma-separated list of "
-                        "unsigned 32-bit decimal or hexadecimal low-high "
-                        "ranges with low <= high";
+                        "decimal or hexadecimal start-end ranges with "
+                        "0 <= start < end <= 0x100000000";
             return;
           }
         } else if (Key == "output_format") {
@@ -311,7 +311,7 @@ public:
       return;
     }
     if (ExcludedRanges.size() == 1 && ExcludedRanges[0].Low == 0 &&
-        ExcludedRanges[0].High == UINT32_MAX) {
+        ExcludedRanges[0].End == AddressLimit) {
       EC = 1;
       LastError = "exclude_range= leaves no available 32-bit address";
       return;
@@ -336,7 +336,7 @@ public:
       std::cout << ", exclude_range=";
       for (size_t I = 0; I < ExcludedRanges.size(); ++I)
         std::cout << (I ? "," : "") << "0x" << std::hex << ExcludedRanges[I].Low
-                  << "-0x" << ExcludedRanges[I].High << std::dec;
+                  << "-0x" << ExcludedRanges[I].End << std::dec;
     }
     std::cout << ", output_format=";
     if (Outputs.empty())
@@ -583,7 +583,7 @@ private:
         return true;
       }
       while (const ExcludedRange *Range = excludedRange(NextSequentialAddr))
-        NextSequentialAddr = static_cast<uint32_t>(uint64_t(Range->High) + 1);
+        NextSequentialAddr = static_cast<uint32_t>(Range->End);
       if (!Assigned.Contents.try_emplace(NextSequentialAddr, Content).second)
         return assignmentError(Entry,
                                "sequential address reuse after wrap (ID " +
@@ -771,12 +771,14 @@ private:
     }
   }
 
+  static constexpr uint64_t AddressLimit = uint64_t(UINT32_MAX) + 1;
+
   struct ExcludedRange {
-    uint32_t Low;
-    uint32_t High;
+    uint64_t Low;
+    uint64_t End;
   };
 
-  static bool parseRangeBound(std::string_view Value, uint32_t &Bound) {
+  static bool parseRangeBound(std::string_view Value, uint64_t &Bound) {
     size_t First = Value.find_first_not_of(" \t\r\n\f\v");
     if (First == std::string_view::npos)
       return false;
@@ -805,8 +807,8 @@ private:
           !parseRangeBound(std::string_view(Range).substr(0, Dash),
                            Bounds.Low) ||
           !parseRangeBound(std::string_view(Range).substr(Dash + 1),
-                           Bounds.High) ||
-          Bounds.Low > Bounds.High)
+                           Bounds.End) ||
+          Bounds.Low >= Bounds.End || Bounds.End > AddressLimit)
         return false;
       ExcludedRanges.push_back(Bounds);
     }
@@ -818,10 +820,9 @@ private:
     // whole ranges, even when the original ranges overlap or are adjacent.
     size_t Count = 0;
     for (ExcludedRange Range : ExcludedRanges) {
-      if (Count &&
-          uint64_t(Range.Low) <= uint64_t(ExcludedRanges[Count - 1].High) + 1)
-        ExcludedRanges[Count - 1].High =
-            std::max(ExcludedRanges[Count - 1].High, Range.High);
+      if (Count && Range.Low <= ExcludedRanges[Count - 1].End)
+        ExcludedRanges[Count - 1].End =
+            std::max(ExcludedRanges[Count - 1].End, Range.End);
       else
         ExcludedRanges[Count++] = Range;
     }
@@ -833,7 +834,7 @@ private:
     auto It =
         std::lower_bound(ExcludedRanges.begin(), ExcludedRanges.end(), Address,
                          [](const ExcludedRange &Range, uint32_t Value) {
-                           return Range.High < Value;
+                           return Range.End <= Value;
                          });
     return It != ExcludedRanges.end() && It->Low <= Address ? &*It : nullptr;
   }

@@ -67,7 +67,7 @@ def check(label, mode, first, second, exclusions=(), cross=True, reverse=False,
         ",".join(order), mode, start, "csv,json" if artifacts else "none",
         "yes" if artifacts else "no")
     if exclusions or ranges:
-        all_ranges = [(value, value) for value in sorted(set(exclusions))] + list(ranges)
+        all_ranges = [(value, value + 1) for value in sorted(set(exclusions))] + list(ranges)
         options += ":exclude_range=" + ",".join("{}-{}".format(low, high)
                                                for low, high in all_ranges)
     config = directory / "plugins.yaml"
@@ -100,7 +100,7 @@ def check(label, mode, first, second, exclusions=(), cross=True, reverse=False,
     expected_rows = [["section", "address", "string"]]
 
     def blocked(address):
-        return address in exclusions or any(low <= address <= high for low, high in ranges)
+        return address in exclusions or any(low <= address < end for low, end in ranges)
 
     for section in order:
         entries = []
@@ -115,9 +115,9 @@ def check(label, mode, first, second, exclusions=(), cross=True, reverse=False,
                         if counter in exclusions:
                             counter = (counter + 1) & MASK32
                         else:
-                            for low, high in ranges:
-                                if low <= counter <= high:
-                                    counter = (high + 1) & MASK32
+                            for low, end in ranges:
+                                if low <= counter < end:
+                                    counter = end & MASK32
                                     break
                     assert counter not in occupied, (label, counter)
                     sequential[text] = counter
@@ -208,12 +208,12 @@ check("seq-wrap-unused", "seq", b"first\0", b"second\0", start=MASK32,
       third=b"third\0")
 check("seq-wrap-duplicates", "seq", b"same\0", b"same\0", start=MASK32)
 check("seq-two-allowed", "seq", b"first\0", b"second\0", start=MASK32 - 1,
-      ranges=[(0, MASK32 - 2)])
+      ranges=[(0, MASK32 - 1)])
 check("seq-cross-exhausted", "seq", b"first\0", b"second\0", start=MASK32 - 1,
-      ranges=[(0, MASK32 - 2)], third=b"third\0",
+      ranges=[(0, MASK32 - 1)], third=b"third\0",
       error="sequential address reuse after wrap (ID 4294967294) for symbol 'third_c'")
-check("seq-single-duplicates", "seq", b"same", b"same\0", ranges=[(0, MASK32 - 1)])
-check("seq-single-exhausted", "seq", b"same", b"same\0", ranges=[(0, MASK32 - 1)],
+check("seq-single-duplicates", "seq", b"same", b"same\0", ranges=[(0, MASK32)])
+check("seq-single-exhausted", "seq", b"same", b"same\0", ranges=[(0, MASK32)],
       third=b"different\0",
       error="sequential address reuse after wrap (ID 4294967295) for symbol 'third_c'")
 

@@ -86,7 +86,7 @@ than one value, its value list remains comma-delimited:
 | `section=<name>[,<name>...]` | required | Output sections to process. |
 | `hash=md5\|sha1\|seq` | `md5` | Address assignment mode. |
 | `seq_start=<value>` | `0` | Starting address for `hash=seq`; accepts a complete unsigned 32-bit decimal, hexadecimal, or octal integer. |
-| `exclude_range=<low>-<high>[,<low>-<high>...]` | none | Inclusive ranges of assigned IDs to reserve. Bounds are unsigned 32-bit decimal or hexadecimal values, with `low <= high`. Sequential IDs skip ranges; MD5/SHA1 try overlapping 32-bit digest slices in 8-bit steps. |
+| `exclude_range=<start>-<end>[,<start>-<end>...]` | none | Half-open ranges of assigned IDs to reserve: `start <= ID < end`. Decimal/hexadecimal bounds must satisfy `0 <= start < end <= 0x100000000`. Sequential IDs skip ranges; MD5/SHA1 try overlapping 32-bit digest slices in 8-bit steps. |
 | `output_format=csv\|json[,csv\|json...]` or `output_format=none` | `none` | Selects one or both mapping formats, e.g. `output_format=csv,json`. Writes one file per selected format per image, containing all modified sections. `none` disables mappings, not the separate debug file. |
 | `output_suffix=<name>` | `reassign` | Filename component shared by every enabled mapping and debug file; see Output file naming below. Does not enable any output by itself. |
 | `gzip=yes\|no` | `no` | Compresses every generated mapping and debug file and appends `.gz`; does not create the uncompressed files. |
@@ -143,19 +143,26 @@ rendered strings does not affect identity or address selection.
 For example:
 
 ```text
-section=.dedup:hash=md5:exclude_range=0x1234-0x4567,100-200,0xffff0000-0xfffffff0
+section=.dedup:hash=md5:exclude_range=0x1234-0x4568,100-201,0xffff0000-0xfffffff1
 ```
 
-Both endpoints are excluded; a single value can be reserved with `100-100`.
+Ranges are half-open: the start is included and the end is excluded, so the end
+is one past the last ID to reserve. For example, `100-200` reserves 100 through
+199, and `100-101` reserves only 100. To reserve `0xffffffff`, use
+`0xffffffff-0x100000000` (or `4294967295-4294967296`). The end may be
+`0x100000000`, although assigned IDs remain 32-bit. Existing configurations
+using inclusive ends must increment each end by one to reserve the same IDs.
+
 Decimal bounds with leading zeros remain decimal, and hexadecimal bounds accept
 `0x` or `0X`. Bounds may have surrounding whitespace. Empty, malformed, reversed,
-negative, or greater-than-32-bit bounds fail the link. Lists can be unsorted;
-overlapping and adjacent ranges are merged. Repeated `exclude_range=` keys use
-the last list. A list covering all `0` through `0xffffffff` values is an error.
+negative, equal-endpoint, or out-of-domain ranges fail the link. Lists can be
+unsorted; overlapping and adjacent ranges are merged. Repeated `exclude_range=`
+keys use the last list. A list covering all `0` through `0xffffffff` values, such as
+`0-0x100000000`, is an error.
 
 With `hash=seq`, the next distinct content gets the next non-excluded ID. If the
-counter is inside a range, it jumps directly to one past the inclusive high
-bound, wrapping to zero when necessary. Identical normalized contents still
+counter is inside a range, it jumps directly to the exclusive end, wrapping to
+zero when that end is `0x100000000`. Identical normalized contents still
 reuse their first assigned ID across all selected sections. Exclusions reduce
 the number of available distinct sequential IDs. Wrapping is permitted while
 the next non-excluded ID has not yet been assigned; trying to reuse an assigned
@@ -412,7 +419,8 @@ are unchanged by thread count.
 
 `ReassignHashBoundaries.test` checks binary contents, an empty symbol, MD5/SHA1
 padding boundaries and large symbols against Python's hashes.
-`ReassignExcludeRanges.test` checks range syntax, inclusive endpoints,
+`ReassignExcludeRanges.test` checks range syntax, inclusive starts/exclusive ends,
+the `0x100000000` end sentinel,
 normalization, every byte-shifted slice and exhaustion, sequential
 skips/wraparound, deduplication, symbol values and mapping/debug consistency.
 `ReassignExcludeRangesThreading.test` forces two-slice hash fallback across
