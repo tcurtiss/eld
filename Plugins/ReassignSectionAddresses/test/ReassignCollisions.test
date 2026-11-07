@@ -1,0 +1,7 @@
+# Part of the eld Project, under the BSD License
+# See https://github.com/qualcomm/eld/LICENSE.txt for license information.
+# SPDX-License-Identifier: BSD-3-Clause
+# REQUIRES: llvm-readelf
+# Real collisions in 32-bit digest slices, within/across sections, excluded
+# alternatives, exhaustion and duplicate reuse after sequential wrap.
+RUN: %python %p/Inputs/check_collisions.py --compiler %clang --compiler-flags="%clangopts" --link %link --readelf %readelf --work %t

@@ -4,6 +4,7 @@
 import argparse
 import csv
 import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,11 @@ def main():
     plugin_dir = Path(args.plugin_dir).resolve()
     tools_dir = Path(args.tools_dir).resolve()
     inputs = Path(__file__).resolve().parent / "Inputs"
+    example_config = plugin_dir / "ReassignSectionAddresses.yaml"
+    source_config = inputs.parent.parent / "ReassignSectionAddresses.yaml"
+    if example_config.read_bytes() != source_config.read_bytes():
+        raise RuntimeError("Built plugin configuration differs from its source: " +
+                           str(example_config))
     env = os.environ.copy()
     runtime_var = ("PATH" if os.name == "nt" else
                    "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else
@@ -76,6 +82,28 @@ def main():
         compile_command += args.target_cxx_args + args.target_cxx_arg
         compile_command += ["-c", str(source), "-o", str(obj), "-fdata-sections"]
         run(compile_command, env, work)
+
+        # Load the exact example shipped beside the plugin, including comments.
+        example_script = work / "example.t"
+        example_script.write_text(linker_script.read_text().replace(
+            ".reassign_a (DSECT)", ".dedup (DSECT)"))
+        example_output = work / "example.out"
+        run([args.target_ld, *args.target_ld_args, *args.target_ld_arg,
+             str(obj), "-T", str(example_script), "-e", "main",
+             "-o", str(example_output), "--plugin-config", str(example_config)],
+            env, work)
+        example_mapping = json.loads(
+            Path(str(example_output) + ".reassign.json").read_text())
+        expected_entries = [
+            {"address": int.from_bytes(hashlib.md5(value.encode() + b"\0").digest()[:4],
+                                       "little"), "string": value}
+            for value in ("same", "other")]
+        if example_mapping["sections"] != [
+                {"section": ".dedup", "entries": expected_entries}]:
+            raise RuntimeError("Example configuration mapping mismatch:\n" +
+                               repr(example_mapping))
+        if not Path(str(example_output) + ".reassign.csv").is_file():
+            raise RuntimeError("Example configuration CSV mapping missing")
 
         config = ("GlobalPlugins:\n"
                   "  - Type: OutputSectionIterator\n"

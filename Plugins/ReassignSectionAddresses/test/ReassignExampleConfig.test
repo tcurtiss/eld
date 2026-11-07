@@ -1,0 +1,12 @@
+# Part of the eld Project, under the BSD License
+# See https://github.com/qualcomm/eld/LICENSE.txt for license information.
+# SPDX-License-Identifier: BSD-3-Clause
+# REQUIRES: llvm-readelf
+# Load the shipped example unchanged, including its full-line and inline comments.
+RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
+RUN: sed 's/\.reassign_a (DSECT)/.dedup (DSECT)/' %p/Inputs/script.t > %t.t
+RUN: %link %linkopts %t.o -T %t.t -e main -o %t.out --plugin-config %p/../ReassignSectionAddresses.yaml
+RUN: %readelf -s %t.out | %filecheck %s
+
+CHECK-DAG: {{[Cc][Cc][Aa][Bb]33[Cc]7}}{{.*}}ABS{{.*}}same_a
+CHECK-DAG: 863425{{[Cc]}}2{{.*}}ABS{{.*}}other_a

@@ -11,7 +11,9 @@
 // content. Alternatively, hash=seq assigns increasing integer values
 // starting at a configurable constant, one per unique symbol content, in
 // the order symbols are encountered, across all target sections combined.
-// Each target section must be declared in the linker script with the
+// exclude_range= reserves inclusive 32-bit ranges. Hash modes try successive
+// 32-bit digest slices in 8-bit steps; sequential mode jumps past excluded
+// ranges. Each target section must be declared in the linker script with the
 // DSECT (or COPY/INFO/OVERLAY) output section type, since its address
 // range is bookkeeping only and is never actually loaded: these types
 // clear SHF_ALLOC on the section, which removes it from both the linker's
@@ -25,10 +27,10 @@
 // hexadecimal digits; JSON addresses are decimal numbers. Paths are derived
 // from the linker output filename.
 //
-// Symbols whose content is byte-identical automatically receive the same
-// address. In hash mode (md5/sha1) this falls out for free, since the
-// address is a pure hash of the symbol's own content -- no explicit
-// duplicate detection is needed. In sequential mode, the plugin keeps an
+// Symbols whose content is byte-identical receive the same address. Hash
+// collisions with different contents try higher-order digest slices, skipping
+// excluded or conflicting IDs across all selected sections. Sequential mode
+// detects ID reuse after wrap. In sequential mode, the plugin keeps an
 // explicit content-to-address map so that repeated content reuses the
 // address assigned to its first occurrence rather than consuming a new
 // counter value, regardless of which target section either occurrence is
@@ -73,8 +75,10 @@
 #include "PluginADT.h"
 #include "PluginVersion.h"
 #include "ReferenceRewriter.h"
+#include <array>
 #include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -112,10 +116,18 @@ public:
   //                     content across *all* target sections combined,
   //                     starting at the value given by "seq_start" (see
   //                     below), in the order symbols are encountered
-  //                     while iterating the sections.
+  //                     while iterating the sections. ID reuse for different
+  //                     contents after wrap is an error. MD5/SHA1 collisions
+  //                     with different bytes try 32-bit digest slices in 8-bit
+  //                     increments toward higher-order bits.
   //   seq_start=<value> Starting value for hash=seq, parsed as a C
   //                     integer literal (e.g. "0x1000" or "4096"); default 0.
   //                     Ignored for hash=md5/sha1.
+  //   exclude_range=<low>-<high>[,<low>-<high>]*
+  //                     Inclusive unsigned 32-bit decimal/hexadecimal ranges,
+  //                     with low <= high. Hashes try 32-bit slices in 8-bit
+  //                     steps until one is allowed; sequential IDs skip the
+  //                     ranges.
   //   output_format=<csv|json>[,<csv|json>]* (or none)
   //                     Write the selected mapping formats, one file each
   //                     containing all modified sections. Default none;
@@ -147,6 +159,7 @@ public:
     SectionIndex.clear();
     Hash = HashKind::MD5;
     NextSequentialAddr = 0;
+    ExcludedRanges.clear();
     Outputs.clear();
     Suffix = "reassign";
     Gzip = false;
@@ -208,6 +221,14 @@ public:
             return;
           }
           NextSequentialAddr = static_cast<uint32_t>(Address);
+        } else if (Key == "exclude_range") {
+          if (!parseExcludedRanges(Value)) {
+            EC = 1;
+            LastError = "exclude_range= must be a comma-separated list of "
+                        "unsigned 32-bit decimal or hexadecimal low-high "
+                        "ranges with low <= high";
+            return;
+          }
         } else if (Key == "output_format") {
           if (!parseOutputs(Value)) {
             EC = 1;
@@ -282,6 +303,12 @@ public:
         std::cout << "[ReassignSectionAddresses] Init: " << LastError << "\n";
       return;
     }
+    if (ExcludedRanges.size() == 1 && ExcludedRanges[0].Low == 0 &&
+        ExcludedRanges[0].High == UINT32_MAX) {
+      EC = 1;
+      LastError = "exclude_range= leaves no available 32-bit address";
+      return;
+    }
     for (size_t I = 0; I < TargetSections.size(); ++I)
       SectionIndex[TargetSections[I]] = I;
     TargetOutputSections.assign(TargetSections.size(), OutputSection(nullptr));
@@ -298,6 +325,12 @@ public:
     if (Hash == HashKind::Sequential)
       std::cout << ", seq_start=0x" << std::hex << NextSequentialAddr
                 << std::dec;
+    if (!ExcludedRanges.empty()) {
+      std::cout << ", exclude_range=";
+      for (size_t I = 0; I < ExcludedRanges.size(); ++I)
+        std::cout << (I ? "," : "") << "0x" << std::hex << ExcludedRanges[I].Low
+                  << "-0x" << ExcludedRanges[I].High << std::dec;
+    }
     std::cout << ", output_format=";
     if (Outputs.empty())
       std::cout << "none";
@@ -359,7 +392,7 @@ public:
         DebugSymbols.resize(TargetSections.size());
       // Input contents remain alive throughout Run; deduplication keys borrow
       // them too, rather than allocating a copy of every distinct string.
-      std::unordered_map<std::string_view, uint32_t> SequentialAddrs;
+      AssignedAddresses Assigned;
       std::vector<std::vector<MappingEntry>> Entries(TargetSections.size());
 
       for (size_t I = 0; I < TargetOutputSections.size(); ++I) {
@@ -385,19 +418,17 @@ public:
             if (Entry.ContentSize &&
                 Entry.ContentData[Entry.ContentSize - 1] == '\0')
               --Entry.ContentSize;
-            if (Hash == HashKind::Sequential) {
-              auto Insertion = SequentialAddrs.try_emplace(
-                  std::string_view(Entry.ContentData, Entry.ContentSize),
-                  NextSequentialAddr);
-              if (Insertion.second)
-                ++NextSequentialAddr;
-              Entry.Addr = Insertion.first->second;
-            }
           }
           Work.push_back(Entry);
         }
         if (Hash != HashKind::Sequential)
           computeHashesInParallel(Work);
+        // Resolve IDs serially in assignment order, across all sections.
+        // Workers only compute digests, so collision handling is thread-count
+        // independent.
+        for (SymbolWork &Entry : Work)
+          if (!assignAddress(Entry, Assigned))
+            return Status::ERROR;
         std::unordered_set<uint32_t> OutputAddrs;
         for (const SymbolWork &Entry : Work) {
           if (Trace)
@@ -421,6 +452,9 @@ public:
         // The assignment index is no longer needed for this section.
         std::vector<Symbol>().swap(Symbols[I]);
       }
+      // Drop the global registries, including their buckets, before rewrites
+      // and output; mapping/debug records borrow original input bytes directly.
+      Assigned = {};
       if (References && !References->apply()) {
         EC = 1;
         LastError = "Cannot write reassigned symbol references";
@@ -508,8 +542,77 @@ private:
     uint32_t ContentSize = 0;
     uint64_t OrigAddr = 0;
     portable::ArrayRef<uint8_t> Bytes;
+    std::array<uint32_t, 5> HashWords{};
     uint32_t Addr = 0;
   };
+
+  struct AssignedAddresses {
+    std::unordered_map<uint32_t, std::string_view> Contents;
+    std::unordered_map<std::string_view, uint32_t> Sequential;
+  };
+
+  bool assignmentError(const SymbolWork &Entry, const std::string &Reason) {
+    EC = 1;
+    LastError = Reason + " for symbol '" + Entry.Sym.getName() + "'";
+    getLinker()->getDiagnosticBuilder(
+        getLinker()->getErrorDiagID("ReassignSectionAddresses: %0"))
+        << LastError;
+    return false;
+  }
+
+  bool assignAddress(SymbolWork &Entry, AssignedAddresses &Assigned) {
+    // Compare exactly the bytes used by the assignment mode. Hash modes include
+    // the trailing NUL; sequential deduplication omits one, as before. Cleaning
+    // mapping strings never affects identity or collision resolution.
+    const size_t Size =
+        Hash == HashKind::Sequential ? Entry.ContentSize : Entry.Bytes.size();
+    const auto Content = Entry.ContentData
+                             ? std::string_view(Entry.ContentData, Size)
+                             : std::string_view();
+    if (Hash == HashKind::Sequential) {
+      auto Existing = Assigned.Sequential.find(Content);
+      if (Existing != Assigned.Sequential.end()) {
+        Entry.Addr = Existing->second;
+        return true;
+      }
+      while (const ExcludedRange *Range = excludedRange(NextSequentialAddr))
+        NextSequentialAddr = static_cast<uint32_t>(uint64_t(Range->High) + 1);
+      if (!Assigned.Contents.try_emplace(NextSequentialAddr, Content).second)
+        return assignmentError(Entry,
+                               "sequential address reuse after wrap (ID " +
+                                   std::to_string(NextSequentialAddr) + ")");
+      Entry.Addr = NextSequentialAddr++;
+      Assigned.Sequential.emplace(Content, Entry.Addr);
+      return true;
+    }
+    bool Collision = false;
+    const size_t Count = Hash == HashKind::SHA1 ? 17 : 13;
+    for (size_t I = 0; I < Count; ++I) {
+      // Words are ordered from lower to higher bits. Each byte step slides the
+      // 32-bit window across at most two words, without shifting by 32 or
+      // reading beyond the final word. No candidate wraps around the end of the
+      // digest.
+      const size_t Word = I / 4;
+      const unsigned Shift = (I % 4) * 8;
+      uint32_t Address = Entry.HashWords[Word] >> Shift;
+      if (Shift)
+        Address |= Entry.HashWords[Word + 1] << (32 - Shift);
+      if (excludedRange(Address))
+        continue;
+      auto Insertion = Assigned.Contents.try_emplace(Address, Content);
+      if (Insertion.second || Insertion.first->second == Content) {
+        Entry.Addr = Address;
+        return true;
+      }
+      Collision = true;
+    }
+    const std::string Mode = Hash == HashKind::SHA1 ? "sha1" : "md5";
+    return assignmentError(
+        Entry,
+        "all " + Mode + " 32-bit digest slices are " +
+            (Collision ? "excluded or already assigned to different contents"
+                       : "excluded"));
+  }
 
   struct MappingEntry {
     uint32_t Address;
@@ -588,8 +691,7 @@ private:
       NumWorkers = 1;
     if (NumWorkers < 2) {
       for (SymbolWork &Entry : Work)
-        if (Entry.ContentData)
-          Entry.Addr = computeLower32(Entry.Bytes);
+        computeHashWords(Entry);
       return;
     }
 
@@ -603,8 +705,7 @@ private:
             break;
           size_t End = std::min(Work.size(), I + Batch);
           for (; I < End; ++I)
-            if (Work[I].ContentData)
-              Work[I].Addr = computeLower32(Work[I].Bytes);
+            computeHashWords(Work[I]);
         }
       });
     }
@@ -663,11 +764,81 @@ private:
     }
   }
 
-  // Returns the lower 32 bits of the configured hash of Bytes.
-  uint32_t computeLower32(portable::ArrayRef<uint8_t> Bytes) const {
-    if (Hash == HashKind::SHA1)
-      return portable::sha1Lower32(Bytes);
-    return portable::md5Lower32(Bytes);
+  struct ExcludedRange {
+    uint32_t Low;
+    uint32_t High;
+  };
+
+  static bool parseRangeBound(std::string_view Value, uint32_t &Bound) {
+    size_t First = Value.find_first_not_of(" \t\r\n\f\v");
+    if (First == std::string_view::npos)
+      return false;
+    Value =
+        Value.substr(First, Value.find_last_not_of(" \t\r\n\f\v") - First + 1);
+    int Base = 10;
+    if (Value.size() >= 2 && Value[0] == '0' &&
+        (Value[1] == 'x' || Value[1] == 'X')) {
+      Value.remove_prefix(2);
+      Base = 16;
+    }
+    auto Result =
+        std::from_chars(Value.data(), Value.data() + Value.size(), Bound, Base);
+    return Result.ec == std::errc() &&
+           Result.ptr == Value.data() + Value.size();
+  }
+
+  bool parseExcludedRanges(const std::string &Value) {
+    ExcludedRanges.clear();
+    std::vector<std::string> Ranges;
+    splitOnComma(Value, Ranges);
+    for (const std::string &Range : Ranges) {
+      size_t Dash = Range.find('-');
+      ExcludedRange Bounds;
+      if (Dash == std::string::npos ||
+          !parseRangeBound(std::string_view(Range).substr(0, Dash),
+                           Bounds.Low) ||
+          !parseRangeBound(std::string_view(Range).substr(Dash + 1),
+                           Bounds.High) ||
+          Bounds.Low > Bounds.High)
+        return false;
+      ExcludedRanges.push_back(Bounds);
+    }
+    std::sort(ExcludedRanges.begin(), ExcludedRanges.end(),
+              [](const ExcludedRange &A, const ExcludedRange &B) {
+                return A.Low < B.Low;
+              });
+    // Normalize once for logarithmic lookup and direct sequential jumps past
+    // whole ranges, even when the original ranges overlap or are adjacent.
+    size_t Count = 0;
+    for (ExcludedRange Range : ExcludedRanges) {
+      if (Count &&
+          uint64_t(Range.Low) <= uint64_t(ExcludedRanges[Count - 1].High) + 1)
+        ExcludedRanges[Count - 1].High =
+            std::max(ExcludedRanges[Count - 1].High, Range.High);
+      else
+        ExcludedRanges[Count++] = Range;
+    }
+    ExcludedRanges.resize(Count);
+    return true;
+  }
+
+  const ExcludedRange *excludedRange(uint32_t Address) const {
+    auto It =
+        std::lower_bound(ExcludedRanges.begin(), ExcludedRanges.end(), Address,
+                         [](const ExcludedRange &Range, uint32_t Value) {
+                           return Range.High < Value;
+                         });
+    return It != ExcludedRanges.end() && It->Low <= Address ? &*It : nullptr;
+  }
+
+  void computeHashWords(SymbolWork &Entry) const {
+    if (Hash == HashKind::SHA1) {
+      auto Words = portable::sha1Words(Entry.Bytes);
+      std::reverse_copy(Words.begin(), Words.end(), Entry.HashWords.begin());
+    } else {
+      auto Words = portable::md5Words(Entry.Bytes);
+      std::copy(Words.begin(), Words.end(), Entry.HashWords.begin());
+    }
   }
 
   std::vector<std::string> TargetSections;
@@ -680,6 +851,7 @@ private:
   bool Debug = false;
   bool CleanStrings = false;
   uint32_t NextSequentialAddr = 0;
+  std::vector<ExcludedRange> ExcludedRanges;
   uint32_t EC = 0;
   std::string LastError = "Success";
   std::unique_ptr<ThreadPool> WorkPool;
