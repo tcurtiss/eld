@@ -87,10 +87,10 @@ than one value, its value list remains comma-delimited:
 | `hash=md5\|sha1\|seq` | `md5` | Address assignment mode. |
 | `seq_start=<value>` | `0` | Starting address for `hash=seq`; accepts a complete unsigned 32-bit decimal, hexadecimal, or octal integer. |
 | `exclude_range=<low>-<high>[,<low>-<high>...]` | none | Inclusive ranges of assigned IDs to reserve. Bounds are unsigned 32-bit decimal or hexadecimal values, with `low <= high`. Sequential IDs skip ranges; MD5/SHA1 try overlapping 32-bit digest slices in 8-bit steps. |
-| `output_format=csv\|json[,csv\|json...]` or `output_format=none` | `none` | Selects one or both mapping formats, e.g. `output_format=csv,json`. Writes one `.<output_suffix>.csv` and/or `.<output_suffix>.json` per image containing all modified sections. `none` disables mapping output. |
-| `output_suffix=<name>` | `reassign` | Filename component used for every mapping/debug output: `<output-file>.<output_suffix>.csv`, `.json`, or `.debug.json`. |
+| `output_format=csv\|json[,csv\|json...]` or `output_format=none` | `none` | Selects one or both mapping formats, e.g. `output_format=csv,json`. Writes one file per selected format per image, containing all modified sections. `none` disables mappings, not the separate debug file. |
+| `output_suffix=<name>` | `reassign` | Filename component shared by every enabled mapping and debug file; see Output file naming below. Does not enable any output by itself. |
 | `gzip=yes\|no` | `no` | Compresses every generated mapping and debug file and appends `.gz`; does not create the uncompressed files. |
-| `debug=yes\|no` | `no` | Writes one `<output-file>.<output_suffix>.debug.json`, grouping every modified symbol's assigned/original address, name, raw bytes, and relocation provenance by output section. Independent of mapping output and linker tracing; compressed when `gzip=yes`. |
+| `debug=yes\|no` | `no` | Writes a separate `<linker-output>.<output_suffix>.debug.json`, grouping symbol details and relocation provenance by output section. Does not enable mapping JSON or change its schema. Honors `output_suffix` and `gzip`; independent of linker tracing. |
 | `clean_strings=yes\|no` | `no` | In CSV/JSON mapping string fields only, retains printable ASCII and tabs, removes CR/LF and other control/non-ASCII bytes, and trims trailing whitespace. Tab runs are not collapsed. |
 
 Example plugin configuration:
@@ -100,7 +100,7 @@ GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: section=.dedup:hash=md5:output_format=csv,json:gzip=yes:debug=yes
+    Options: "section=.dedup:hash=md5:output_format=csv,json:gzip=yes:debug=yes"
 ```
 
 ELD plugin configuration files are YAML and accept `#` comments on their own
@@ -108,9 +108,11 @@ lines or after a value. Keep comments outside the quoted `Options` string;
 the plugin receives it as a single colon-delimited string, not individual YAML
 option keys. Both in-tree and standalone builds copy the fully annotated
 [`ReassignSectionAddresses.yaml`](ReassignSectionAddresses.yaml) beside the
-built plugin library. Copy it elsewhere before customizing it, since rebuilding
-refreshes the build-directory copy. Replace its `.dedup` section with your
-linker-script output section name, and load it with:
+built plugin library. That runnable example is part of this plugin's
+documentation and describes every supported option. Copy it elsewhere before
+customizing it, since rebuilding refreshes the build-directory copy. Replace
+its `.dedup` section with your linker-script output section name, and load it
+with:
 
 ```sh
 ld.eld ... -L <plugin-directory> --plugin-config <your-config.yaml>
@@ -174,9 +176,9 @@ bytes are interpreted big-endian: windows cover `[16:20]`, `[15:19]`, ... `[0:4]
 each decoded big-endian. This gives 17 positions at offsets 0, 8, ... 128.
 Windows overlap; repeated candidate values are possible. No window wraps around
 or reads beyond the digest. This preserves existing first-choice IDs when they
-are neither excluded nor conflicting. If every slice is
-excluded or belongs to different contents, the link fails with a symbol-specific
-diagnostic rather than inventing an ID or silently accepting a collision.
+are neither excluded nor conflicting. If every slice is excluded or belongs to
+different contents, the link fails with a symbol-specific diagnostic rather than
+inventing an ID or silently accepting a collision.
 Identical bytes reuse the same chosen ID, including after fallback. Selection
 is deterministic in final section/rule/chunk/symbol order and independent of
 thread count. When distinct contents collide, whichever is encountered first
@@ -188,15 +190,34 @@ Exclusions apply to assigned symbol IDs, not to an interior-reference offset
 subsequently added to an ID. Rewritten references and CSV/JSON/debug outputs all
 use the selected ID; file formats and output naming are unchanged.
 
-### Combined CSV and JSON mappings
+### Output file naming
 
 All output paths retain the full linker output filename, including its
-extension. `output_suffix=reassign` is the default. Set, for example,
-`output_suffix=string_ids` to produce `image.so.string_ids.csv`,
-`image.so.string_ids.json`, and `image.so.string_ids.debug.json` when enabled.
-`gzip=yes` appends `.gz` to each. The suffix must be nonempty and contain no
-path separators or control bytes; it changes filenames only, not file contents.
-Repeated `output_suffix=` keys use the last value.
+extension and directory. For example, `<linker-output>` is `out/image.so` when
+ELD is invoked with `-o out/image.so`. `output_suffix=reassign` is the default;
+each enabled file uses the same suffix:
+
+| Output | Enabled by | Filename before optional gzip compression |
+| --- | --- | --- |
+| CSV mapping | `output_format` includes `csv` | `<linker-output>.<output_suffix>.csv` |
+| JSON mapping | `output_format` includes `json` | `<linker-output>.<output_suffix>.json` |
+| Separate debug JSON | `debug=yes` | `<linker-output>.<output_suffix>.debug.json` |
+
+For `image.so` and `output_suffix=ids`, these are `image.so.ids.csv`,
+`image.so.ids.json`, and `image.so.ids.debug.json`, respectively, when enabled.
+The debug filename is derived directly from the linker output and suffix, not
+by appending `.debug.json` to the mapping JSON filename.
+`gzip=yes` appends `.gz` after the complete extension, so the debug file becomes
+`image.so.ids.debug.json.gz`. Without a custom suffix, it is
+`image.so.reassign.debug.json`, or `image.so.reassign.debug.json.gz` when
+compressed.
+
+The suffix must be nonempty and contain no path separators or control bytes;
+it changes filenames only, not file contents or which outputs are enabled.
+Repeated `output_suffix=` keys use the last value. All following default-name
+examples assume `output_suffix=reassign` unless stated otherwise.
+
+### CSV and JSON mappings
 
 `output_format=csv` writes one `image.so.reassign.csv` beside linker output
 `image.so`, containing all modified sections. The first column is the original
@@ -243,8 +264,8 @@ output without disabling address assignment or detailed debug JSON.
 Use `output_format=csv,json` (or `output_format=json,csv`) to generate both
 mappings in the same link. Duplicate formats are ignored. `none` must appear
 alone; unknown formats and empty list items are errors. Repeated
-`output_format=` keys replace the previous selection, as with other non-list
-options.
+`output_format=` keys replace the previous selection, as with other keys except
+`section=`.
 
 `gzip=yes` applies to **every generated file**, including debug JSON. For
 `output_format=csv,json:debug=yes:gzip=yes`, the files are:
@@ -271,30 +292,38 @@ byte to U+0000–U+00FF rather than assuming UTF-8. Encoding a decoded JSON stri
 as Latin-1 recovers the same bytes as the CSV field. Section names are never
 cleaned.
 
-### Combined symbol and relocation debug JSON
+### Separate symbol and relocation debug JSON
 
 Set `debug=yes` to inspect every modified symbol and the work performed on
-its plugin-owned relocations, even when `output_format=none`:
+its plugin-owned relocations. It writes a separate file, even when
+`output_format=none`. It does not implicitly enable `output_format=json`,
+extend the mapping JSON schema, or replace any selected mapping format.
+Conversely, `output_format=json` does not enable debug output.
+
+For example, a debug-only configuration with a custom suffix is:
 
 ```yaml
-    Options: section=.dedup:hash=md5:debug=yes
+    Options: "section=.dedup:hash=md5:output_format=none:output_suffix=ids:debug=yes"
 ```
 
-For output `image.so`, this writes one `image.so.reassign.debug.json`
-containing all modified sections (or `.reassign.debug.json.gz` with
-`gzip=yes`). The version-3 JSON object contains `schema_version`, `plugin`,
-`output_file`, and
-a `sections` array. Each section entry has its original `section` name and
-a `symbols` array. Section names are preserved exactly, without filename
-normalization; names such as `.dedup` and `dedup` remain distinct. Sections
-without modified symbols are omitted, and no debug file is created if no
+For linker output `image.so`, this creates only `image.so.ids.debug.json`;
+adding `gzip=yes` instead creates `image.so.ids.debug.json.gz`. Neither mapping
+JSON nor CSV is generated. Omitting `output_suffix=ids` uses the default filename
+`image.so.reassign.debug.json`.
+
+The debug file has its own version-3 schema (`"schema_version": 3`), distinct from
+the version-1 mapping JSON. Its object contains `schema_version`, `plugin`,
+`output_file`, and a `sections` array. Each section entry has its original
+`section` name and a `symbols` array. Section names are preserved exactly,
+without filename normalization; names such as `.dedup` and `dedup` remain
+distinct. Sections without modified symbols are omitted, and no debug file is created if no
 symbols were modified.
 
-Each symbol has `symbol`, `input_file`,
-`input_section`, `assigned_address`, `original_address`, `raw_bytes`, and
-`relocations`. Raw bytes are hexadecimal and include any trailing NUL;
-original addresses are captured before reassignment. All modified symbols are
-included, including duplicate-content symbols and symbols whose relocation
+Each symbol has `symbol`, `input_file`, `input_section`, `assigned_address`,
+`original_address`, `raw_bytes`, and `relocations`. Raw bytes are hexadecimal
+and include any trailing NUL; original addresses are captured before
+reassignment. All modified symbols are included, including duplicate-content
+symbols and symbols whose relocation
 arrays are empty. Same-named local symbols from different inputs are kept
 separate. Section entries follow the configured section order.
 
@@ -322,10 +351,10 @@ Unchanged relocations and debug-information relocations are not included.
 
 Mapping and debug outputs default to off and leave existing artifacts untouched
 when disabled. Absent sections or sections with no modified object symbols produce
-no artifacts. With `debug=yes`, files are replaced after address assignment
-and reference encoding. Failure to open/write/close any enabled artifact fails
-the link. A later link failure can leave diagnostic artifacts, so their
-presence alone does not prove that ELF output completed successfully.
+no artifacts. Enabled mapping and debug files are replaced after address
+assignment and reference encoding. Failure to open/write/close any enabled
+artifact fails the link. A later link failure can leave diagnostic artifacts,
+so their presence alone does not prove that ELF output completed successfully.
 
 ## Threading and memory usage
 
@@ -390,10 +419,10 @@ skips/wraparound, deduplication, symbol values and mapping/debug consistency.
 1,024 symbols and verifies rewritten references and all output formats with
 serial/parallel hashing and gzip.
 `ReassignCollisions.test` uses real MD5/SHA1 collisions at word/byte boundaries
-and the final slice to check
-within/cross-section fallback, excluded alternatives, duplicate reuse, reversed
-section order, disabled outputs and exhaustion. It also checks sequential wrap
-with unused IDs, duplicate reuse after wrap and cross-section exhaustion.
+and the final slice to check within/cross-section fallback, excluded alternatives,
+duplicate reuse, reversed section order, disabled outputs and exhaustion.
+It also checks sequential wrap with unused IDs, duplicate reuse after wrap and
+cross-section exhaustion.
 `ReassignCollisionsThreading.test` checks real lower-word collisions and repeated
 contents across input files/sections, including rewritten references, gzip and
 all outputs under serial/parallel hashing.
@@ -411,6 +440,12 @@ objects through `resetSymbol()`: early definitions participate in reassignment,
 while late definitions in populated or initially empty indexed chunks are
 diagnosed before any mapping/debug output. `ReassignPartialLink.test` checks
 rejection of plugin-enabled `-r` and the supported partial-then-final workflow.
+`ReassignExampleConfig.test` loads the documented YAML example unchanged,
+including whole-line and inline comments. The standalone smoke test also checks
+that an exact copy is present beside the built library.
+`ReassignOutputSuffix.test` checks default/custom suffixes, debug-only output,
+gzip filename extensions, and invalid suffixes. `ReassignMultipleOutputs.test`
+checks independent mapping/debug selection and each JSON schema.
 
 ## Build as part of ELD
 

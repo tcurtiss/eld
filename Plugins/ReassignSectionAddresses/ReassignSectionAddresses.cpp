@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 //===----------------------------------------------------------------------===//
 //
-// Example plugin that assigns an absolute address to every symbol defined
-// in one or more named output sections. By default, and with
-// hash=md5/hash=sha1, the address is derived from the lower 32 bits of
+// Example plugin that assigns an absolute address to every object symbol
+// defined in one or more named output sections. By default, and with
+// hash=md5/hash=sha1, the first candidate is the lower 32 bits of
 // a hash (MD5 or SHA1, selectable via plugin options) of the symbol's own
 // content. Alternatively, hash=seq assigns increasing integer values
 // starting at a configurable constant, one per unique symbol content, in
@@ -21,11 +21,15 @@
 // a PT_LOAD segment. Target sections are given via the required "section="
 // option key (see Init() below for the full options string format).
 //
-// Optionally, the plugin writes an address/string mapping to one CSV or JSON
-// file per output image. CSV includes a section column; JSON groups entries
-// by section. CSV addresses use 0x followed by eight zero-padded uppercase
+// Optionally, the plugin writes an address/string mapping to one file per
+// selected format (CSV and/or JSON) per output image. CSV includes a section
+// column; JSON groups entries by section. CSV addresses use 0x followed by
+// eight zero-padded uppercase
 // hexadecimal digits; JSON addresses are decimal numbers. Paths are derived
 // from the linker output filename.
+// debug=yes writes a separate <image>.<output_suffix>.debug.json file; it does
+// not enable mapping JSON or extend its schema. gzip=yes appends .gz to every
+// enabled output, including the separate debug file.
 //
 // Symbols whose content is byte-identical receive the same address. Hash
 // collisions with different contents try higher-order digest slices, skipping
@@ -133,17 +137,20 @@ public:
   //                     containing all modified sections. Default none;
   //                     CSV adds a leading section column.
   //   output_suffix=<name>
-  //                     Filename suffix (default reassign). Outputs are named
-  //                     <image>.<output_suffix>.csv/.json/.debug.json, with .gz
-  //                     appended when enabled. Must be a nonempty filename
+  //                     Filename suffix (default reassign), shared by every
+  //                     enabled mapping/debug file. Append .csv, .json, or
+  //                     .debug.json to <image>.<output_suffix>, then .gz when
+  //                     enabled. Must be a nonempty filename
   //                     component without path separators or control bytes.
   //   gzip=<yes|no>     Compress all mapping/debug outputs as <path>.gz;
   //                     the uncompressed path is not created (default no).
-  //   debug=<yes|no>    Write <output>.<output_suffix>.debug.json with
+  //   debug=<yes|no>    Write separate <image>.<output_suffix>.debug.json with
   //                     per-section entries for every modified symbol's
   //                     assigned/original address,
   //                     name, raw bytes, and relocation provenance (default
-  //                     no). Independent of output_format= and tracing.
+  //                     no). Independent of output_format= and tracing; does
+  //                     not enable mapping JSON or extend its schema. Honors
+  //                     output_suffix= and gzip=yes.
   //   clean_strings=<yes|no>
   //                     When yes, clean mapping string fields in CSV/JSON:
   //                     retain printable ASCII and tabs, remove CR/LF and
