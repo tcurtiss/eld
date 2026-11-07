@@ -86,9 +86,9 @@ CLEAN-STRINGS: ".reassign_clean",0x00000100,"A{{[[:blank:]][[:blank:]]}}BCD"
 
 # The exact digest values are checked through the symbol table.  The same
 # bytes must receive the same MD5 address in both symbols.
-MD5-SYMBOLS: {{.*}}863425c2{{.*}}other_a
-MD5-SYMBOLS: {{.*}}ccab33c7{{.*}}same_a
-MD5-SYMBOLS: {{.*}}ccab33c7{{.*}}same_a_duplicate
+MD5-SYMBOLS-DAG: {{.*}}863425c2{{.*}}other_a{{$}}
+MD5-SYMBOLS-DAG: {{.*}}ccab33c7{{.*}}same_a{{$}}
+MD5-SYMBOLS-DAG: {{.*}}ccab33c7{{.*}}same_a_duplicate{{$}}
 
 SHA1-DUMP: ".reassign_a",0xA47AD810,"same"
 SHA1-DUMP: ".reassign_a",0x35BB3C79,"other"

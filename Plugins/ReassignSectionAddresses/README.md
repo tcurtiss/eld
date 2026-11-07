@@ -8,6 +8,8 @@ sections. It is intended for bookkeeping sections such as `DSECT`, `COPY`,
 Address assignment runs after layout, when output sections and symbol contents
 are known. On Hexagon, relocation callbacks first identify and claim references
 to selected strings, before ELD allocates GOT entries or dynamic relocations.
+Callbacks run in ELD's serial prepass. Either operand's callback validates and
+claims a complete immediate pair; the other callback does not repeat that work.
 
 ## References to assigned IDs on Hexagon
 
@@ -46,10 +48,19 @@ Unrelated GOT entries and dynamic relocations are unchanged.
 
 This requires the public `LinkerWrapper::claimUse`, `isSymbolPreemptible`, and
 `setSymbolAddress` APIs in both the build SDK and the runtime ELD package.
+The SDK and runtime must implement the updated ownership contract: serial
+pre-scan callbacks, claims outside a use's own callback, and validation that
+every surviving claim receives replacement data before relocation application.
+There is no compatibility path for the earlier callback-only ownership behavior.
+The standalone CMake checks verify API declarations, not these runtime semantics.
 `claimUse` is generic; section selection, symbol attribution, instruction
 validation and byte encoding reside in this plugin. Claimed operands are omitted
 from `--emit-relocs`, because their final bytes no longer need relocation.
 GC dependencies are preserved and debug relocations are not claimed.
+Each claimed Use receives its own final replacement bytes after layout. A
+failed claim or replacement write fails the link. Claims need not be made from
+that Use's own callback, but must finish before ELD starts target scanning;
+the output-section `BeforeLayout` hook is already too late to claim.
 
 Supported instruction forms include extended transfers, immediate stores,
 `combine` with an extended first immediate, register/immediate `combine`, and
@@ -57,9 +68,13 @@ upper-half duplex transfers, as well as the PC/GOT forms above. Unsupported
 selected-target relocations, malformed or overlapping pairs, ambiguous symbol
 extents, missing symbols, and address-plus-offset overflow are errors rather
 than silently incorrect IDs. Selected strings must be non-interposable (local,
-hidden, protected, or otherwise locally bound). Partial links do not perform
-this reference rewrite; apply the plugin at the final link. Other targets retain
-their existing relocation behavior. This does not dereference or execute IDs.
+hidden, protected, or otherwise locally bound). Plugin-enabled partial links
+(`-r`) are rejected on every target, before address assignment or artifact
+generation. Perform partial links without this plugin, then enable it only at
+the final link. Other targets retain their existing relocation behavior; they
+do not gain Hexagon's instruction rewrite or its protection against relaxation
+based on placeholder addresses. Disable relaxation for affected address-taking
+code where necessary. This does not dereference or execute IDs.
 
 ## Options
 
@@ -247,35 +262,51 @@ presence alone does not prove that ELF output completed successfully.
 ## Threading and memory usage
 
 The plugin honors ELD's thread count; `--no-threads` keeps plugin work serial.
-Assignment snapshots scan each relevant input's symbol table once and preserve
-section/rule/chunk order and local-before-global symbol order. Symbol address
-changes and replacement-data submission remain serial because the ELD layout
-operations they record are not thread-safe.
+On Hexagon final links, reference attribution builds one original extent index.
+Final assignment reads each relevant input's live symbol table once and validates
+the selected objects against that index. This final read is required to catch
+objects defined or moved into an already-indexed chunk by another plugin;
+iterating only cached entries would silently omit them. Once attribution has
+begun, late additions, moves into selected chunks, and extent changes are errors.
+Surviving references whose target is no longer selected also fail the link.
+Discarded sources do not require rewrites. Sequential IDs retain final
+section/rule/chunk order and input local-before-global symbol order, not sorted
+extent order. Other targets keep their normal final-assignment enumeration.
+Symbol address changes and replacement-data submission remain serial in this
+plugin. ELD now supports thread-safe replacement submission, including map
+logging, but that guarantee does not extend to `setSymbolAddress` or all other
+plugin APIs.
 
 MD5/SHA1 process borrowed input blocks with a fixed 128-byte padding buffer,
 without allocating or copying a symbol's contents. Sequential deduplication
 also borrows content keys. Hash jobs share one lazily created pool at ELD's
-configured capacity. Work is batched (up to 32 symbols per claim); fewer than
+configured capacity. Work is batched (up to 32 symbols per batch); fewer than
 256 symbols totaling less than 64 KiB are hashed serially to avoid scheduling
 overhead. These are conservative thresholds, not a guarantee of speedup for
 every image or host.
 
 Relocation callbacks discard non-runtime sources and unselected targets before
-initializing the immutable target index. Source-use caches initialize once per
-chunk without holding the global cache lock during enumeration. A separate
-short lock protects collected records. `claimUse()` remains in the original
-callback, as required by ELD's callback ownership checks.
+initializing the target inventory, after symbol resolution and GC. Source-use
+indices are built once per relevant chunk. Pair validation checks both storage
+fields for duplicates and overlaps before either is claimed. Collection needs
+no mutexes, atomics or once-flags because callbacks are serial. Extent, direct
+symbol, pair and source-use indices are released, including their hash-table
+buckets, after final validation and before hashing/output. No relocation
+workers are launched. Runtime code size and generated instruction forms are
+unchanged.
 
 After assignments and reference encoding, enabled CSV, JSON and debug files
 can be rendered/compressed concurrently, with exactly one writer per file.
 Writers consume frozen metadata and borrowed symbol bytes, not mutable linker
 state. Memory scales with compact per-symbol/per-relocation indices and mapping
-entries, rather than rendered file sizes; metadata shared across debug records
-is snapshotted once per chunk/symbol/type. Each gzip writer has a fixed 64 KiB
-buffer. Raw debug bytes are streamed as hex without an intermediate full-size
-hex string. All writers finish before errors are reported in deterministic
-format-list order. File content and address assignment order are unchanged by
-thread count.
+entries, rather than rendered file sizes. Debug records share original
+file/section snapshots per chunk and names per symbol; they do not copy those
+strings per relocation. Final output membership and relocation-type names are
+also snapshotted once per chunk/type before writers start. Each gzip writer
+has a fixed 64 KiB buffer. Raw debug bytes are streamed as hex without an
+intermediate full-size hex string. All writers finish before errors are reported
+in deterministic format-list order. File content and address assignment order
+are unchanged by thread count.
 
 `ReassignHashBoundaries.test` checks binary contents, an empty symbol, MD5/SHA1
 padding boundaries and large symbols against Python's hashes.
@@ -285,6 +316,14 @@ Binary CSV checks compare exact encoded records rather than using
 1,024 selected symbols, selected and unrelated relocations, and two sections.
 It compares serial and 1/2/4/8-thread images, CSV/JSON/debug contents, and gzip
 output for all three hash modes, and checks replacement bytes in the ELF.
+`ReassignReferenceRewrite.test` additionally checks low-first PC-relative,
+absolute and GOT pairs, missing/overlapping partner operands, and sequential
+assignment whose input symbol order differs from its offset order.
+`ReassignSymbolInventory.test` uses a test-only cooperating plugin to define
+objects through `resetSymbol()`: early definitions participate in reassignment,
+while late definitions in populated or initially empty indexed chunks are
+diagnosed before any mapping/debug output. `ReassignPartialLink.test` checks
+rejection of plugin-enabled `-r` and the supported partial-then-final workflow.
 
 ## Build as part of ELD
 
@@ -354,8 +393,9 @@ execution on target hardware. Test artifacts remain in lit's output directory.
 
 The ten `ReassignPermutations*.test` groups use
 `test/Inputs/check_address_permutations.py` for focused coverage outside the
-504-link matrix. They check 137 successful links plus four negative-control
-links in C/C++ (COMDAT is C++ and the relaxation fixture is assembly):
+504-link matrix. They check 137 successful plugin-enabled links plus four
+negative-control links in C/C++ (COMDAT is C++ and the relaxation fixture is
+assembly), with three additional plugin-free relaxation control links:
 
 - Full LTO, ThinLTO, and LTO using an external assembler.
 - Compilation without function/data section splitting; `-O3`, `-Os`, DWARF v5
@@ -370,8 +410,10 @@ links in C/C++ (COMDAT is C++ and the relaxation fixture is assembly):
 - Static PIE (`--static --pie --no-dynamic-linker`) and a PIE mixing PIC and
   PIE objects. Sequential IDs are allowed to change with input order, while
   their references must remain correct; content hashes remain stable.
-- Actual instruction deletion by `--relax` and section-selective relaxation,
-  together with address rewriting in the relaxed fragment.
+- `--relax` and section-selective relaxation together with address rewriting.
+  A plugin-free control checks whether ELD supports instruction-deleting
+  relaxation and requires the same deletion and adjusted fixups when available;
+  ELD builds providing only trampoline insertion retain their original size.
 - Cross-TU inline COMDAT definitions, weak-only and strong-overridden data,
   aliases, both object orders, and `-Bsymbolic`.
 

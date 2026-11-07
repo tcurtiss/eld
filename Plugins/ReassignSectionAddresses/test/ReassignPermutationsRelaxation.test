@@ -1,3 +1,4 @@
 # REQUIRES: hexagon, llvm-readelf, llvm-objdump
-# Actually delete a branch while rewriting a string address in a relaxed fragment.
+# Check rewritten IDs with relaxation. A plugin-free control requires actual
+# branch deletion and adjusted fixups wherever ELD supports deleting relaxation.
 RUN: %python %p/Inputs/check_address_permutations.py --compiler %clang --compiler-flags="%clangopts" --language c --case relaxation --link %link --readelf %readelf --objdump %objdump --work %t.c.dir

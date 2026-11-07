@@ -12,11 +12,8 @@
 #include "OutputFile.h"
 #include "PluginADT.h"
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <iterator>
-#include <memory>
-#include <mutex>
 #include <optional>
 #include <tuple>
 #include <unordered_map>
@@ -36,6 +33,10 @@ class ReferenceRewriter {
     uint64_t Offset;
     uint64_t Size;
   };
+  struct SymbolLocation {
+    const eld::Fragment *Fragment;
+    size_t Index;
+  };
   struct Target {
     Symbol Sym;
     int64_t Interior;
@@ -47,15 +48,19 @@ class ReferenceRewriter {
     Encoding Kind;
     uint32_t Word;
   };
-  // Only populated with debug=yes. Keep the original target chunk because
-  // setSymbolAddress detaches its symbol from the original fragment.
+  struct DebugChunk {
+    std::string File;
+    std::string Section;
+    std::string OutputSection;
+  };
+  // Only populated with debug=yes. Shared snapshots preserve original names
+  // across symbol reassignment; unordered_map rehash does not invalidate them.
   struct DebugReference {
     size_t Index;
-    Chunk OriginalTarget;
-    std::string SourceFile;
-    std::string SourceSection;
+    const DebugChunk *OriginalTarget;
+    const DebugChunk *OriginalSource;
     uint64_t Offset;
-    std::string OriginalSymbol;
+    const std::string *OriginalSymbol;
     uint32_t OriginalType;
     int64_t OriginalAddend;
     uint32_t OriginalData;
@@ -64,17 +69,8 @@ class ReferenceRewriter {
     Chunk SourceChunk{nullptr};
   };
   using UseIndex = std::unordered_map<uint64_t, Use>;
-  struct SourceIndex {
-    std::once_flag Once;
-    std::optional<UseIndex> Uses;
-  };
-  struct DebugChunk {
-    std::string File;
-    std::string Section;
-    std::string OutputSection;
-  };
   struct DebugTarget {
-    std::string Name;
+    const std::string *Name;
     uint32_t Address;
   };
 
@@ -116,9 +112,23 @@ public:
   }
 
   void indexSymbols() {
-    // Enumerate each input file once, rather than rescanning its symbol table
-    // for every selected chunk. Contents are borrowed, not copied.
+    if (Indexed)
+      return;
+    Indexed = true;
+    // Snapshot relevant object extents before scanning. Final assignment
+    // separately checks the live symbol tables for late plugin mutations.
     for (auto F : LW.getInputFiles()) {
+      bool Relevant = false;
+      for (auto S : F.getSections()) {
+        auto O = S.getOutputSection();
+        if (!O || !Selected.count(O.getName()))
+          continue;
+        Relevant = true;
+        for (Chunk C : S.getChunks())
+          Symbols.try_emplace(C.getFragment());
+      }
+      if (!Relevant)
+        continue;
       for (Symbol S : F.getSymbols()) {
         if (!S.isObject() || S.isUndef() || S.isGarbageCollected())
           continue;
@@ -138,15 +148,17 @@ public:
           continue;
         }
         Symbols[C.getFragment()].push_back({S, uint64_t(Offset), S.getSize()});
-        DirectSymbols.insert(S);
       }
     }
     for (auto &Item : Symbols) {
+      auto &Entries = Item.second;
       std::stable_sort(
-          Item.second.begin(), Item.second.end(),
+          Entries.begin(), Entries.end(),
           [](const Entry &A, const Entry &B) { return A.Offset < B.Offset; });
       const Entry *Previous = nullptr;
-      for (const Entry &E : Item.second) {
+      for (size_t I = 0; I < Entries.size(); ++I) {
+        const Entry &E = Entries[I];
+        DirectSymbols.emplace(E.Sym, SymbolLocation{Item.first, I});
         if (Previous && E.Offset < Previous->Offset + Previous->Size &&
             (E.Offset != Previous->Offset || E.Size != Previous->Size)) {
           Failed = true;
@@ -162,7 +174,7 @@ public:
   }
 
   void collect(Use U) {
-    if (!Enabled || Failed.load(std::memory_order_relaxed))
+    if (!Enabled || Failed)
       return;
     Chunk Source = U.getSourceChunk();
     // Debug information is not runtime code/data and must retain its normal
@@ -175,13 +187,15 @@ public:
     auto O = C.getSection().getOutputSection();
     if (!O || !Selected.count(O.getName()))
       return;
+    if (PairedUses.erase(U))
+      return;
     // Config::Init runs while inputs are still being read. Initialize only
     // for a relevant callback, after symbol resolution and GC.
-    std::call_once(IndexOnce, [this] { indexSymbols(); });
+    indexSymbols();
     if (Failed)
       return;
     auto It = Symbols.find(C.getFragment());
-    if (It == Symbols.end()) {
+    if (It == Symbols.end() || It->second.empty()) {
       fail(U, "selected target has no object symbols");
       return;
     }
@@ -190,21 +204,15 @@ public:
       return;
     auto Uses = usesFor(Source);
     auto Offset = U.getOffsetInChunk();
-    if (!Uses || Offset < 0)
+    if (!Uses || !validateOperand(U, *Uses))
       return;
-    auto Here = Uses->find(Offset);
-    if (Here == Uses->end() || !(Here->second == U)) {
-      fail(U, "duplicate relocation at selected operand");
-      return;
-    }
-    for (int Delta = -3; Delta <= 3; ++Delta)
-      if (Delta && Offset + Delta >= 0 && Uses->count(Offset + Delta)) {
-        fail(U, "overlapping relocation at selected operand");
-        return;
-      }
     int64_t Addend = U.getTargetChunkOffset();
     Encoding Kind = Encoding::Pointer;
     uint32_t Word = 0;
+    Use Other(nullptr);
+    bool High = false;
+    uint32_t HighWord = 0;
+    uint32_t LowWord = 0;
     if (Name != "R_HEX_32") {
       bool PC = Name == "R_HEX_B32_PCREL_X" || Name == "R_HEX_6_PCREL_X";
       bool GOT = Name == "R_HEX_GOT_32_6_X" || Name == "R_HEX_GOT_11_X";
@@ -214,8 +222,8 @@ public:
         fail(U, "unsupported selected-target relocation " + Name);
         return;
       }
-      bool High = Name == "R_HEX_B32_PCREL_X" || Name == "R_HEX_GOT_32_6_X" ||
-                  Name == "R_HEX_32_6_X";
+      High = Name == "R_HEX_B32_PCREL_X" || Name == "R_HEX_GOT_32_6_X" ||
+             Name == "R_HEX_32_6_X";
       if (Offset < 0 || (!High && Offset < 4)) {
         fail(U, "invalid immediate-pair offset");
         return;
@@ -244,7 +252,7 @@ public:
       }
       uint64_t OtherOffset = High ? HighOffset + 4 : HighOffset;
       auto Paired = Uses->find(OtherOffset);
-      Use Other = Paired == Uses->end() ? Use(nullptr) : Paired->second;
+      Other = Paired == Uses->end() ? Use(nullptr) : Paired->second;
       auto OtherName =
           Other ? LW.getRelocationHandler().getRelocationName(Other.getType())
                 : std::string();
@@ -265,6 +273,8 @@ public:
         fail(U, "missing or conflicting paired relocation");
         return;
       }
+      if (!validateOperand(Other, *Uses))
+        return;
       auto OtherAddend = int64_t(Other.getTargetChunkOffset());
       if (PC) {
         Addend -= uint64_t(Offset) - *Start;
@@ -274,19 +284,20 @@ public:
         fail(U, "inconsistent paired relocation addends");
         return;
       }
-      Kind = High ? Encoding::High : Encoding::Low;
+      Kind = Encoding::Low;
       // Replacement has no memory access or PC/GOT dependence. Preserve the
       // packet parse/loop bits and destination register, and no other fields.
-      Word = High ? (*Extender & 0xf000c000) : (0x78000000 | (*Low & 0xc01f));
-      if (Absolute && !High) {
+      HighWord = *Extender & 0xf000c000;
+      LowWord = 0x78000000 | (*Low & 0xc01f);
+      if (Absolute) {
         if (Duplex) {
           Kind = Encoding::DuplexLow;
-          Word = *Low & ~0x03f00000u;
+          LowWord = *Low & ~0x03f00000u;
         } else if (Store) {
           Kind = Encoding::StoreLow;
-          Word = *Low & ~0x207fu;
+          LowWord = *Low & ~0x207fu;
         } else {
-          Word = *Low & ~(Transfer ? 0x00df3fe0u : 0x1fe0u);
+          LowWord = *Low & ~(Transfer ? 0x00df3fe0u : 0x1fe0u);
         }
       }
     }
@@ -297,37 +308,16 @@ public:
       fail(U, "selected string target is interposable; bind it locally first");
       return;
     }
-    auto OriginalData =
-        Debug ? readWord(Source, Offset, false) : std::optional<uint32_t>(0);
-    if (!OriginalData) {
-      fail(U, "missing original relocation data for provenance");
+    if (!Other) {
+      record({U, *T, Kind, Word});
       return;
     }
-    auto Claim = LW.claimUse(U);
-    if (!Claim) {
-      LW.reportDiagEntry(std::move(Claim.error()));
-      Failed = true;
-      return;
+    // Either callback can claim both operands. Validate/resolve the complete
+    // pair once, and leave the subsequent callback with nothing to do.
+    if (record({High ? U : Other, *T, Encoding::High, HighWord}) &&
+        record({High ? Other : U, *T, Kind, LowWord})) {
+      PairedUses.insert(Other);
     }
-    // Prepare metadata outside the append lock. claimUse must remain in the
-    // current callback: ELD validates its ownership using thread-local state.
-    DebugReference D{};
-    if (Debug)
-      D = {0,
-           C,
-           Source.getInputFile().getFileName(),
-           Source.getName(),
-           uint64_t(Offset),
-           U.getName(),
-           U.getType(),
-           int64_t(U.getTargetChunkOffset()),
-           *OriginalData};
-    std::lock_guard<std::mutex> Guard(ReferencesMutex);
-    if (Debug) {
-      D.Index = References.size();
-      DebugReferences.push_back(std::move(D));
-    }
-    References.push_back({U, *T, Kind, Word});
   }
 
   bool apply() {
@@ -335,6 +325,8 @@ public:
       return false;
     for (size_t I = 0; I < References.size(); ++I) {
       const Reference &R = References[I];
+      if (!survives(R.U))
+        continue;
       uint64_t Address = R.T.Sym.getValue();
       if (Address > UINT32_MAX || R.T.Interior < -int64_t(Address) ||
           R.T.Interior > int64_t(UINT32_MAX - Address)) {
@@ -364,46 +356,67 @@ public:
     return true;
   }
 
+  void validateAssignments(const std::vector<std::vector<Symbol>> &Sections) {
+    if (!Enabled)
+      return;
+    indexSymbols();
+    if (Failed)
+      return;
+    std::unordered_set<Symbol> Assigning;
+    for (const auto &Section : Sections)
+      for (Symbol S : Section)
+        if (validateSymbol(S))
+          Assigning.insert(S);
+    for (const Reference &R : References)
+      if (survives(R.U) && !Assigning.count(R.T.Sym))
+        fail(R.U, "claimed target is no longer in a selected output section");
+    // Release collection/validation storage, including outer bucket arrays.
+    // References retain everything needed for final encoding and provenance.
+    decltype(Symbols)().swap(Symbols);
+    decltype(DirectSymbols)().swap(DirectSymbols);
+    decltype(SourceUses)().swap(SourceUses);
+    decltype(PairedUses)().swap(PairedUses);
+  }
+
   void prepareDebug(const std::vector<std::vector<DebugSymbol>> &Symbols) {
     DebugImage = LW.getOutputFileName();
-    DebugChunks.clear();
     DebugTargets.clear();
     DebugTypes.clear();
-    auto SnapshotChunk = [&](Chunk C) {
-      if (!DebugChunks.count(C))
-        DebugChunks.emplace(
-            C, DebugChunk{C.getInputFile().getFileName(), C.getName(),
-                          C.getSection().getOutputSection().getName()});
-    };
     for (const auto &Section : Symbols)
       for (const DebugSymbol &S : Section) {
-        DebugTargets.emplace(S.Sym,
-                             DebugTarget{S.Sym.getName(), S.AssignedAddress});
-        SnapshotChunk(S.OriginalChunk);
+        DebugTargets.emplace(
+            S.Sym, DebugTarget{snapshotDebugName(S.Sym), S.AssignedAddress});
+        snapshotDebugChunk(S.OriginalChunk);
       }
     DebugUses.clear();
     for (DebugReference &D : DebugReferences) {
       const Reference &R = References[D.Index];
+      if (!survives(R.U))
+        continue;
       D.SourceAddress = R.U.getSourceAddress();
       D.SourceChunk = R.U.getSourceChunk();
-      SnapshotChunk(D.SourceChunk);
-      SnapshotChunk(D.OriginalTarget);
+      snapshotDebugChunk(D.SourceChunk);
       if (!DebugTypes.count(D.OriginalType))
         DebugTypes.emplace(
             D.OriginalType,
             LW.getRelocationHandler().getRelocationName(D.OriginalType));
       DebugUses[References[D.Index].T.Sym].push_back(&D);
     }
-    // Callback order can differ with parallel scanning. Use stable input
-    // identities and final source addresses, never pointer values, for
-    // ordering.
+    // File/section names were captured during collection; output membership
+    // and source addresses are final only now. Query each chunk once.
+    for (auto &Item : DebugChunks) {
+      auto O = Item.first.getSection().getOutputSection();
+      Item.second.OutputSection = O ? O.getName() : std::string();
+    }
+    // Order provenance by stable input identities and final source addresses,
+    // independent of which operand's callback discovered a pair first.
     for (auto &Group : DebugUses)
       std::sort(Group.second.begin(), Group.second.end(),
                 [](const DebugReference *A, const DebugReference *B) {
-                  auto KA =
-                      std::tie(A->SourceFile, A->SourceSection, A->Offset);
-                  auto KB =
-                      std::tie(B->SourceFile, B->SourceSection, B->Offset);
+                  auto KA = std::tie(A->OriginalSource->File,
+                                     A->OriginalSource->Section, A->Offset);
+                  auto KB = std::tie(B->OriginalSource->File,
+                                     B->OriginalSource->Section, B->Offset);
                   if (KA != KB)
                     return KA < KB;
                   return A->SourceAddress < B->SourceAddress;
@@ -436,7 +449,7 @@ public:
               for (const DebugSymbol &S : Symbols[I]) {
                 const DebugChunk &C = DebugChunks.at(S.OriginalChunk);
                 JSON.object([&] {
-                  JSON.attribute("symbol", DebugTargets.at(S.Sym).Name);
+                  JSON.attribute("symbol", *DebugTargets.at(S.Sym).Name);
                   JSON.attribute("input_file", C.File);
                   JSON.attribute("input_section", C.Section);
                   JSON.attribute("assigned_address", S.AssignedAddress);
@@ -459,30 +472,117 @@ public:
     return File.finish();
   }
 
+  bool failed() const { return Failed; }
+
+private:
   bool validateSymbol(Symbol S) {
     if (!Enabled)
       return true;
-    std::call_once(IndexOnce, [this] { indexSymbols(); });
-    if (DirectSymbols.count(S))
-      return !Failed;
-    Failed = true;
     auto C = S.getChunk();
+    auto It = DirectSymbols.find(S);
+    if (It != DirectSymbols.end() && It->second.Fragment == C.getFragment()) {
+      const Entry &E = Symbols.at(It->second.Fragment)[It->second.Index];
+      auto Offset = S.getOffsetInChunk();
+      if (Offset >= 0 && uint64_t(Offset) == E.Offset &&
+          S.getSize() == E.Size && E.Offset <= C.getSize() &&
+          E.Size <= C.getSize() - E.Offset)
+        return true;
+      Failed = true;
+      LW.getDiagnosticBuilder(ErrorID)
+          << "selected symbol changed after indexing"
+          << C.getInputFile().getFileName() << C.getName()
+          << std::to_string(Offset);
+      return false;
+    }
+    Failed = true;
     LW.getDiagnosticBuilder(ErrorID)
         << "selected symbol was not indexed before relocation scanning; "
-           "provide an explicit output section rule"
+           "provide an explicit output section rule and finalize selected "
+           "objects before scanning"
         << C.getInputFile().getFileName() << C.getName()
         << std::to_string(S.getOffsetInChunk());
     return false;
   }
 
-  bool failed() const { return Failed; }
+  const DebugChunk *snapshotDebugChunk(Chunk C) {
+    auto It = DebugChunks.find(C);
+    if (It == DebugChunks.end())
+      It = DebugChunks
+               .emplace(
+                   C,
+                   DebugChunk{C.getInputFile().getFileName(), C.getName(), {}})
+               .first;
+    return &It->second;
+  }
 
-private:
+  const std::string *snapshotDebugName(Symbol S) {
+    auto It = DebugNames.find(S);
+    if (It == DebugNames.end())
+      It = DebugNames.emplace(S, S.getName()).first;
+    return &It->second;
+  }
+
+  static bool survives(Use U) {
+    Chunk C = U.getSourceChunk();
+    if (!C)
+      return false;
+    auto S = C.getSection();
+    auto O = S.getOutputSection();
+    return !S.isIgnore() && !S.isDiscarded() && !S.isGarbageCollected() &&
+           (!O || !O.isDiscard());
+  }
+
+  bool validateOperand(Use U, const UseIndex &Uses) {
+    auto Offset = U.getOffsetInChunk();
+    if (Offset < 0) {
+      fail(U, "invalid relocation offset");
+      return false;
+    }
+    auto Here = Uses.find(Offset);
+    if (Here == Uses.end() || !(Here->second == U)) {
+      fail(U, "duplicate relocation at selected operand");
+      return false;
+    }
+    uint64_t Position = Offset;
+    for (uint64_t Delta = 1; Delta <= 3; ++Delta)
+      if ((Position >= Delta && Uses.count(Position - Delta)) ||
+          (Position <= UINT64_MAX - Delta && Uses.count(Position + Delta))) {
+        fail(U, "overlapping relocation at selected operand");
+        return false;
+      }
+    return true;
+  }
+
+  bool record(const Reference &R) {
+    Use U = R.U;
+    Chunk Source = U.getSourceChunk();
+    auto OriginalData = Debug ? readWord(Source, U.getOffsetInChunk(), false)
+                              : std::optional<uint32_t>(0);
+    if (!OriginalData) {
+      fail(U, "missing original relocation data for provenance");
+      return false;
+    }
+    auto Claim = LW.claimUse(U);
+    if (!Claim) {
+      LW.reportDiagEntry(std::move(Claim.error()));
+      Failed = true;
+      return false;
+    }
+    if (Debug)
+      DebugReferences.push_back(
+          {References.size(), snapshotDebugChunk(U.getTargetChunk()),
+           snapshotDebugChunk(Source), uint64_t(U.getOffsetInChunk()),
+           snapshotDebugName(U.getSymbol()), U.getType(),
+           int64_t(U.getTargetChunkOffset()), *OriginalData});
+    References.push_back(R);
+    return true;
+  }
+
   void writeDebugReference(eld::plugin::portable::JSONWriter &JSON,
                            const DebugReference &D) const {
     const Reference &R = References[D.Index];
     const DebugChunk &Source = DebugChunks.at(D.SourceChunk);
-    const DebugChunk &Target = DebugChunks.at(D.OriginalTarget);
+    const DebugChunk &Target = *D.OriginalTarget;
     const DebugTarget &Symbol = DebugTargets.at(R.T.Sym);
     const std::string &Type = DebugTypes.at(D.OriginalType);
     const char *Transformation =
@@ -494,8 +594,8 @@ private:
             : "absolute-immediate-update";
     JSON.object([&] {
       JSON.attributeObject("source", [&] {
-        JSON.attribute("file", D.SourceFile);
-        JSON.attribute("section", D.SourceSection);
+        JSON.attribute("file", D.OriginalSource->File);
+        JSON.attribute("section", D.OriginalSource->Section);
         JSON.attribute("offset", D.Offset);
         JSON.attribute("address", D.SourceAddress);
         JSON.attribute("output_section", Source.OutputSection);
@@ -503,7 +603,7 @@ private:
       JSON.attributeObject("original", [&] {
         JSON.attribute("type", Type);
         JSON.attribute("type_id", D.OriginalType);
-        JSON.attribute("symbol", D.OriginalSymbol);
+        JSON.attribute("symbol", *D.OriginalSymbol);
         JSON.attribute("addend", D.OriginalAddend);
         JSON.attribute("data", D.OriginalData);
       });
@@ -511,7 +611,7 @@ private:
         JSON.attribute("file", Target.File);
         JSON.attribute("section", Target.Section);
         JSON.attribute("output_section", Target.OutputSection);
-        JSON.attribute("symbol", Symbol.Name);
+        JSON.attribute("symbol", *Symbol.Name);
         JSON.attribute("interior_offset", R.T.Interior);
         JSON.attribute("assigned_address", Symbol.Address);
       });
@@ -522,34 +622,23 @@ private:
   }
 
   const UseIndex *usesFor(Chunk C) {
-    SourceIndex *Cached;
-    {
-      std::lock_guard<std::mutex> Guard(SourceUsesMutex);
-      auto &Slot = SourceUses[C.getFragment()];
-      if (!Slot)
-        Slot = std::make_unique<SourceIndex>();
-      Cached = Slot.get();
-    }
-    // Only callbacks for the same source wait for its initialization. The
-    // expensive API enumeration and index allocation hold no global mutex.
-    std::call_once(Cached->Once, [&] {
+    auto [It, Inserted] = SourceUses.try_emplace(C.getFragment());
+    if (Inserted) {
       auto Uses = LW.getUses(C);
       if (!Uses) {
         LW.reportDiagEntry(std::move(Uses.error()));
         Failed = true;
-        return;
+        return nullptr;
       }
-      auto &Index = Cached->Uses.emplace();
+      auto &Index = It->second;
       for (Use U : Uses.value())
         if (U.getSourceChunk() == C && U.getOffsetInChunk() >= 0) {
           auto Insert = Index.emplace(U.getOffsetInChunk(), U);
           if (!Insert.second)
             Insert.first->second = Use(nullptr);
         }
-    });
-    // Cache entries are never erased; heap ownership keeps this pointer stable
-    // even if other callbacks rehash SourceUses.
-    return Cached->Uses ? &*Cached->Uses : nullptr;
+    }
+    return &It->second;
   }
 
   std::optional<Target> resolve(Use U, const std::vector<Entry> &Entries,
@@ -630,21 +719,20 @@ private:
 
   LinkerWrapper &LW;
   std::unordered_set<std::string> Selected;
-  std::once_flag IndexOnce;
   std::unordered_map<const eld::Fragment *, std::vector<Entry>> Symbols;
-  std::unordered_set<Symbol> DirectSymbols;
+  std::unordered_map<Symbol, SymbolLocation> DirectSymbols;
   std::vector<Reference> References;
   std::vector<DebugReference> DebugReferences;
   std::unordered_map<Symbol, std::vector<const DebugReference *>> DebugUses;
   std::unordered_map<Chunk, DebugChunk> DebugChunks;
+  std::unordered_map<Symbol, std::string> DebugNames;
   std::unordered_map<Symbol, DebugTarget> DebugTargets;
   std::unordered_map<uint32_t, std::string> DebugTypes;
-  std::unordered_map<const eld::Fragment *, std::unique_ptr<SourceIndex>>
-      SourceUses;
-  std::mutex SourceUsesMutex;
-  std::mutex ReferencesMutex;
+  std::unordered_map<const eld::Fragment *, UseIndex> SourceUses;
+  std::unordered_set<Use> PairedUses;
   std::string DebugImage;
-  std::atomic<bool> Failed{false};
+  bool Failed = false;
+  bool Indexed = false;
   uint32_t ErrorID = 0;
   bool Enabled = false;
   bool Debug = false;

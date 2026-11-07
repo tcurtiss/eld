@@ -1,4 +1,4 @@
 # REQUIRES: hexagon, llvm-readelf
-# Many independent inputs/chunks generate concurrent relevant callbacks.
+# Many inputs/chunks exercise serial collection and parallel hashing/output.
 # Compare all hashes, thread counts, mapping formats and compressed debug.
 RUN: %python %p/Inputs/check_threading.py --compiler %clang --compiler-flags="%clangopts" --link %link --readelf %readelf --references --work %t

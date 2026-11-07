@@ -1,0 +1,12 @@
+# Enabling reassignment during -r must fail before symbols or artifacts change.
+# A normal partial link followed by a plugin-enabled final link remains valid.
+RUN: %clang %clangopts -c %p/Inputs/data.c -o %t.o -fdata-sections
+RUN: %not %link -r %t.o -T %p/Inputs/script.t --plugin-config %p/Inputs/PluginConfigSequential.yaml -o %t.rejected.o 2>&1 | %filecheck %s
+RUN: test ! -e %t.rejected.o.reassign.csv
+RUN: test ! -e %t.rejected.o.reassign.json
+RUN: test ! -e %t.rejected.o.reassign.debug.json
+RUN: %link -r %t.o -o %t.partial.o
+RUN: %link %linkopts %t.partial.o -T %p/Inputs/script.t --plugin-config %p/Inputs/PluginConfigSequential.yaml -e main -o %t.final.out
+RUN: %python %p/Inputs/check_mapping_output.py %t.final.out --format csv --sections .reassign_a .reassign_b
+
+CHECK: partial links are not supported; apply ReassignSectionAddresses at the final link

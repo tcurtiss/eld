@@ -110,6 +110,19 @@ text = run([args.objdump, "-d", image], work)
 assert immediate(text, "r0") == 0xfedcba99, text
 assert syms["second"]["Value"] == 0xfedcba99, syms
 
+# Attribution sorts object extents, but sequential assignment must retain the
+# original local-before-global symbol order, not address order within a chunk.
+mixed = link_case("mixed-symbol-order", pair + targets.replace(
+    ".local fmt", ".globl fmt\n.hidden fmt"), options=("output_format=json",))
+mixed_symbols = {s["Name"]["Name"]: s for s in symbols(inspect(args, mixed))}
+assert mixed_symbols["second"]["Value"] == 0xfedcba98, mixed_symbols
+assert mixed_symbols["fmt"]["Value"] == 0xfedcba99, mixed_symbols
+assert immediate(run([args.objdump, "-d", mixed], work), "r0") == 0xfedcba98
+mapping = json.loads(Path(str(mixed) + ".reassign.json").read_text())
+assert mapping["sections"][0]["entries"] == [
+    {"address": 0xfedcba98, "string": "second"},
+    {"address": 0xfedcba99, "string": "format"}], mapping
+
 got_source = '''
 .text
 .globl entry
@@ -294,6 +307,42 @@ records = check_sidecar(debug_image, 2)
 assert {r["transformation"] for r in records} == {"pc-relative-to-absolute"}, records
 assert {r["target"]["symbol"] for r in records} == {"second"}, records
 assert {r["value"] for r in records} == {0xfedcba99}, records
+
+# Low-first relocation records must claim and write both operands exactly once.
+# Also validate the other operand's overlaps before claiming either operand.
+high_reloc = ".reloc .Lhigh, R_HEX_B32_PCREL_X, .dedup + 7"
+low_reloc = ".reloc .Llow, R_HEX_6_PCREL_X, .dedup + 11"
+reverse_pair = pair.replace(high_reloc + "\n" + low_reloc,
+                            low_reloc + "\n" + high_reloc)
+for name, source, transformation in (
+    ("pc", reverse_pair, "pc-relative-to-absolute"),
+    ("absolute", reverse_pair.replace("0x6a49c000", "0x7800c000")
+     .replace("R_HEX_B32_PCREL_X", "R_HEX_32_6_X")
+     .replace("R_HEX_6_PCREL_X", "R_HEX_16_X")
+     .replace(".dedup + 11", ".dedup + 7"), "absolute-immediate-update"),
+    ("got", reverse_pair.replace("0x6a49c000", "0x9180c000")
+     .replace("R_HEX_B32_PCREL_X", "R_HEX_GOT_32_6_X")
+     .replace("R_HEX_6_PCREL_X", "R_HEX_GOT_11_X")
+     .replace(".dedup + 7", "fmt").replace(".dedup + 11", "fmt"),
+     "got-load-to-absolute"),
+):
+    reversed_image = link_case("low-first-" + name, source + targets,
+                               options=("debug=yes",))
+    original = inspect(args, reversed_image.with_suffix(".o"))
+    original_sections = sections(original)
+    text_relocs = [r["Relocation"] for g in original["Relocations"]
+                   if original_sections[g["SectionIndex"]]["Name"]["Name"] == ".rela.text"
+                   for r in g["Relocs"]]
+    assert [r["Offset"] for r in text_relocs] == [4, 0], text_relocs
+    reversed_records = check_sidecar(reversed_image, 2)
+    assert {r["transformation"] for r in reversed_records} == {transformation}
+    assert immediate(run([args.objdump, "-d", reversed_image], work), "r0") == (
+        0xfedcba98 if name == "got" else 0xfedcba99)
+link_case("low-first-missing", reverse_pair.replace(high_reloc, "") + targets,
+          "missing or conflicting paired relocation")
+link_case("low-first-partner-overlap", reverse_pair +
+          ".reloc .Lhigh + 1, R_HEX_8, .dedup + 7\n" + targets,
+          "overlapping relocation")
 parallel = sidecar(debug_image).read_bytes()
 link_case('debug-"quoted"\\path', pair + targets, options=("debug=yes",), extra=("--no-threads",))
 assert sidecar(debug_image).read_bytes() == parallel, debug_image

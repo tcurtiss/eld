@@ -1,0 +1,4 @@
+# REQUIRES: hexagon, llvm-readelf, llvm-objdump
+# A cooperating plugin may define an object before attribution, but must not
+# silently add one to an indexed (including initially empty) chunk afterward.
+RUN: %python %p/Inputs/check_symbol_inventory.py --compiler %clang --compiler-flags="%clangopts" --link %link --readelf %readelf --objdump %objdump --work %t

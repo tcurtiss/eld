@@ -116,18 +116,28 @@ def relaxation_case(args, work):
     obj = work / "relax.o"
     run([args.compiler, *shlex.split(args.compiler_flags), "-x", "assembler",
          "-Wa,--reloc-section-sym=none", "-c", inputs / "relax_strings.s", "-o", obj], work)
-    command = [args.link, "--shared", obj, "-T", inputs / "address_patterns.t",
-               "--plugin-config", plugin_config(work)]
+    control_command = [args.link, "--shared", obj, "-T", inputs / "address_patterns.t"]
+    command = [*control_command, "--plugin-config", plugin_config(work)]
+    control = work / "control.elf"
+    run(control_command + ["-o", control], work)
+    control_size = len(text_bytes(args, control)[1])
     baseline = work / "baseline.elf"
     run(command + ["-o", baseline], work)
     check_returns(args, baseline, {"relaxed_id": b"relax"})
+    baseline_size = len(text_bytes(args, baseline)[1])
     for option in ("--relax", "--relax=.text.aaa"):
         image = work / ("all.elf" if option == "--relax" else "selected.elf")
+        relaxed_control = work / ("control-" + image.name)
+        run(control_command + [option, "-o", relaxed_control], work)
+        deleted = control_size - len(text_bytes(args, relaxed_control)[1])
+        # Some ELD builds only insert trampolines rather than deleting branches.
+        # Require the plugin to preserve the control's behavior, including real
+        # instruction deletion and adjusted fixups whenever it is supported.
+        assert deleted in (0, 4), (option, deleted)
         run(command + [option, "-o", image], work)
         check_returns(args, image, {"relaxed_id": b"relax"})
-        # A real instruction must have been deleted: accepting --relax alone
-        # is not sufficient to exercise RegionFragmentEx and relaxed fixups.
-        assert len(text_bytes(args, image)[1]) == len(text_bytes(args, baseline)[1]) - 4
+        assert len(text_bytes(args, image)[1]) == baseline_size - deleted
+        print("{}: control and plugin deleted {} instruction bytes".format(option, deleted))
     return 3
 
 
