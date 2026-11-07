@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stress borrowed hashing, deterministic assignments and concurrent callbacks."""
+"""Stress borrowed hashing, deterministic assignments and parallel output."""
 
 import argparse
 import gzip

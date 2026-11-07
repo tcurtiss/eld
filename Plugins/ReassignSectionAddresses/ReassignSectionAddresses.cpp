@@ -324,6 +324,12 @@ public:
 
   Status Run(bool Trace) override {
     TraceEnabled = Trace;
+    if (getLinker()->getLinkMode() == LinkerWrapper::PartialLink) {
+      EC = 1;
+      LastError = "partial links are not supported; apply "
+                  "ReassignSectionAddresses at the final link";
+      return Status::ERROR;
+    }
     if (References && References->failed()) {
       EC = 1;
       LastError = "Cannot rewrite references to reassigned symbols";
@@ -341,8 +347,13 @@ public:
 
     if (getLinker()->isLinkStateAfterLayout()) {
       // Freeze the selected symbol order before setSymbolAddress detaches any
-      // symbol from its original chunk. Each relevant file is scanned once.
+      // symbol from its original chunk. Validate the live final inventory.
       auto Symbols = assignmentSymbols();
+      if (References && References->failed()) {
+        EC = 1;
+        LastError = "Cannot validate original symbol attribution";
+        return Status::ERROR;
+      }
       std::vector<std::vector<ReferenceRewriter::DebugSymbol>> DebugSymbols;
       if (Debug)
         DebugSymbols.resize(TargetSections.size());
@@ -361,8 +372,6 @@ public:
         std::vector<SymbolWork> Work;
         Work.reserve(Symbols[I].size());
         for (Symbol Sym : Symbols[I]) {
-          if (!validateOriginalSymbol(Sym))
-            return Status::ERROR;
           SymbolWork Entry;
           Entry.Sym = Sym;
           Entry.OrigAddr = Sym.getAddress();
@@ -493,14 +502,6 @@ private:
     return Status::ERROR;
   }
 
-  bool validateOriginalSymbol(Symbol S) {
-    if (!References || References->validateSymbol(S))
-      return true;
-    EC = 1;
-    LastError = "Cannot validate original symbol attribution";
-    return false;
-  }
-
   struct SymbolWork {
     Symbol Sym{nullptr};
     const char *ContentData = nullptr;
@@ -517,6 +518,8 @@ private:
   };
 
   std::vector<std::vector<Symbol>> assignmentSymbols() {
+    // Read each final input symbol table once. Reusing only the pre-scan
+    // objects would silently omit symbols defined or moved by another plugin.
     std::unordered_map<const eld::Fragment *, std::vector<Symbol>> ByChunk;
     std::unordered_set<InputFile> Files;
     std::vector<std::vector<Chunk>> Chunks(TargetOutputSections.size());
@@ -526,6 +529,10 @@ private:
       for (LinkerScriptRule Rule :
            TargetOutputSections[I].getLinkerScriptRules())
         for (Chunk C : Rule.getChunks()) {
+          if (C.getSection().isIgnore() || C.getSection().isDiscarded() ||
+              C.getSection().isGarbageCollected() ||
+              TargetOutputSections[I].isDiscard())
+            continue;
           Chunks[I].push_back(C);
           ByChunk.try_emplace(C.getFragment());
           Files.insert(C.getInputFile());
@@ -548,6 +555,8 @@ private:
         const auto &Symbols = ByChunk.at(C.getFragment());
         Result[I].insert(Result[I].end(), Symbols.begin(), Symbols.end());
       }
+    if (References)
+      References->validateAssignments(Result);
     return Result;
   }
 
