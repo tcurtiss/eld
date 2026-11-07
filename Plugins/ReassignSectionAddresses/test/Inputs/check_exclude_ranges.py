@@ -2,7 +2,7 @@
 # Part of the eld Project, under the BSD License
 # See https://github.com/qualcomm/eld/LICENSE.txt for license information.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Check inclusive ID exclusions independently of plugin hash/assignment code."""
+"""Check half-open ID exclusions independently of plugin hash/assignment code."""
 
 import argparse
 import hashlib
@@ -16,6 +16,7 @@ from mapping_csv import check_mapping_csv
 
 
 MASK32 = 0xffffffff
+LIMIT32 = MASK32 + 1
 parser = argparse.ArgumentParser()
 parser.add_argument("--compiler", required=True)
 parser.add_argument("--compiler-flags", default="")
@@ -65,7 +66,7 @@ def digest_slices(mode, value):
 
 
 def excluded(value, ranges):
-    return any(low <= value <= high for low, high in ranges)
+    return any(low <= value < end for low, end in ranges)
 
 
 def check(label, mode, ranges=(), value=None, start=0, error=None, extra=""):
@@ -119,9 +120,9 @@ def check(label, mode, ranges=(), value=None, start=0, error=None, extra=""):
             if mode == "seq":
                 if normalized not in assigned:
                     while excluded(next_value, ranges):
-                        for low, high in ranges:
-                            if low <= next_value <= high:
-                                next_value = (high + 1) & MASK32
+                        for low, end in ranges:
+                            if low <= next_value < end:
+                                next_value = end & MASK32
                                 break
                     assigned[normalized] = next_value
                     next_value = (next_value + 1) & MASK32
@@ -151,48 +152,70 @@ for mode in ("md5", "sha1"):
     assert len(set(words)) == len(words), words
     for depth in range(len(words)):
         result = check(mode + "-slice-" + str(depth), mode,
-                       [(word, word) for word in words[:depth]])
+                       [(word, word + 1) for word in words[:depth]])
         assert result["same_a"] == words[depth], (mode, depth, result)
         assert result["same_a"] == result["same_b"] == result["same_a_duplicate"]
-    # Each endpoint is inclusive, even when it is the usual digest value.
-    check(mode + "-low-inclusive", mode, [(words[0], words[0] + 1)])
-    check(mode + "-high-inclusive", mode, [(words[0] - 1, words[0])])
-    check(mode + "-exhausted", mode, [(word, word) for word in words],
+    # The start is excluded; the end remains available for the usual digest ID.
+    result = check(mode + "-low-inclusive", mode, [(words[0], words[0] + 1)])
+    assert result["same_a"] == words[1], (mode, result)
+    result = check(mode + "-end-exclusive", mode, [(words[0] - 1, words[0])])
+    assert result["same_a"] == words[0], (mode, result)
+    check(mode + "-exhausted", mode, [(word, word + 1) for word in words],
           error="all {} 32-bit digest slices are excluded for symbol 'same_a'".format(mode))
     # Excluding every old non-overlapping word must no longer exhaust the hash.
     result = check(mode + "-word-boundaries-excluded", mode,
-                   [(word, word) for word in words[::4]])
+                   [(word, word + 1) for word in words[::4]])
     assert result["same_a"] == words[1], (mode, result)
+    check(mode + "-end-sentinel-exhausted", mode, [(1, LIMIT32)],
+          error="all {} 32-bit digest slices are excluded for symbol 'same_a'".format(mode))
 
 check("seq-basic", "seq", [(100, 200), (0x1234, 0x4567), (0xffff0000, 0xfffffff0)],
       value="0x1234-0x4567,100-200,0xffff0000-0xfffffff0", start=99)
-check("seq-inclusive-start", "seq", [(100, 200)], start=100)
-check("seq-inclusive-end", "seq", [(100, 200)], start=200)
+result = check("seq-inclusive-start", "seq", [(100, 200)], start=100)
+assert result["same_a"] == 200, result
+result = check("seq-before-end", "seq", [(100, 200)], start=199)
+assert result["same_a"] == 200, result
+result = check("seq-exclusive-end", "seq", [(100, 200)], start=200)
+assert result["same_a"] == 200, result
+result = check("seq-single-excluded", "seq", [(100, 101)], start=100)
+assert result["same_a"] == 101, result
 check("seq-hexadecimal-range", "seq", [(0x1234, 0x4567)], start=0x1234)
 check("seq-upper-range", "seq", [(0xffff0000, 0xfffffff0)], start=0xffff0000)
-check("seq-unsorted-overlapping", "seq", [(100, 102), (104, 109)], start=99,
-      value="108-109,104-105,100-101,105-108,101-102")
+check("seq-unsorted-overlapping", "seq", [(100, 103), (104, 110)], start=99,
+      value="108-110,104-106,100-102,105-109,101-103")
+result = check("seq-adjacent", "seq", [(100, 102), (102, 104)], start=100)
+assert result["same_a"] == 104, result
+result = check("seq-gap", "seq", [(100, 102), (103, 105)], start=99)
+assert (result["same_a"] == 99 and result["other_a"] == 102 and
+        result["third_b"] == 105), result
 check("seq-leading-zero-decimal", "seq", [(100, 200)], value="0100-0200", start=100)
 check("seq-whitespace-hex", "seq", [(100, 200)], value=" 0X64 - 0XC8 ", start=100)
-check("seq-wrap", "seq", [(0, 2), (MASK32 - 1, MASK32)], start=MASK32 - 2)
-check("seq-single-allowed", "seq", [(0, MASK32 - 1)],
+check("seq-wrap", "seq", [(0, 2), (MASK32 - 1, LIMIT32)], start=MASK32 - 2)
+result = check("seq-final-id-excluded", "seq", [(MASK32, LIMIT32)], start=MASK32)
+assert result["same_a"] == 0, result
+result = check("seq-decimal-end-sentinel", "seq", [(MASK32, LIMIT32)],
+               value="4294967295-4294967296", start=MASK32)
+assert result["same_a"] == 0, result
+check("seq-single-allowed", "seq", [(0, MASK32)],
       error="sequential address reuse after wrap (ID 4294967295) for symbol 'other_a'")
-check("seq-zero-only", "seq", [(1, MASK32)], start=MASK32,
+check("seq-zero-only", "seq", [(1, LIMIT32)], start=MASK32,
       error="sequential address reuse after wrap (ID 0) for symbol 'other_a'")
 # Repeated keys have the same last-value-wins policy as other scalar options.
-check("seq-repeated", "seq", [(100, 102)], value="0-0xffffffff", start=100,
+check("seq-repeated", "seq", [(100, 102)], value="0-0x100000000", start=100,
       extra=":exclude_range=100-102")
 check("seq-unset", "seq")
 
 invalid = ("", "10", "10-", "-20", "-1-2", "1--2", "1-2-3", "2-1",
-           "0x20-0x10", "1-0x100000000", "4294967296-4294967296",
+           "0x20-0x10", "0-0", "100-100", "0xffffffff-0xffffffff",
+           "1-0x100000001", "4294967296-4294967296", "4294967296-4294967297",
+           "0-18446744073709551615", "0-18446744073709551616",
            "0x-0x5", "xyz-2", "1-2,", "1-2,,3-4", ",1-2", "1-2junk",
            "+1-2", "0b10-20", "1-+2")
 for index, value in enumerate(invalid):
     check("invalid-" + str(index), "md5", value=value,
           error="exclude_range= must be a comma-separated list")
-for index, value in enumerate(("0-0xffffffff", "2147483648-4294967295,0-2147483647",
-                               "0-300,100-4294967295")):
+for index, value in enumerate(("0-0x100000000", "2147483648-4294967296,0-2147483648",
+                               "0-300,100-4294967296")):
     check("full-" + str(index), "seq", value=value,
           error="exclude_range= leaves no available 32-bit address")
 

@@ -34,9 +34,12 @@ GlobalPlugins:
     # Unsigned 32-bit decimal, hexadecimal, or octal, e.g. 256, 0x100, or 0400.
     # Sequential IDs increment and wrap, but reuse for different contents fails.
     #
-    # exclude_range=<low>-<high>[,<low>-<high>...] (default no exclusions):
-    # inclusive unsigned 32-bit decimal/hexadecimal bounds; require low <= high.
-    # Example: exclude_range=0x1234-0x4567,100-200,0xffff0000-0xfffffff0
+    # exclude_range=<start>-<end>[,<start>-<end>...] (default no exclusions):
+    # half-open decimal/hexadecimal ranges: start <= ID < end, with
+    # 0 <= start < end <= 0x100000000. The end is one past the last reserved ID.
+    # Example: exclude_range=0x1234-0x4568,100-201,0xffff0000-0xfffffff1
+    # 100-101 reserves only 100; 0xffffffff-0x100000000 reserves the final ID.
+    # Increase old inclusive ends by one to preserve existing exclusions.
     # Overlapping/adjacent ranges merge. Invalid bounds or full-space exclusion
     # fail the link. Sequential IDs jump past ranges; hashes try the next slice.
     # Exclusions apply to assigned IDs, not an interior-reference offset added
@@ -84,7 +87,7 @@ GlobalPlugins:
     Options: "section=.dedup:hash=md5:seq_start=0:output_format=csv,json:output_suffix=reassign:gzip=no:debug=no:clean_strings=no" # Edit this string.
 
     # Alternative with reserved IDs and compressed mapping/debug outputs:
-    # Options: "section=QSR_STR_SO:hash=sha1:exclude_range=0x1234-0x4567,100-200,0xffff0000-0xfffffff0:output_format=csv,json:output_suffix=reassign:gzip=yes:debug=yes:clean_strings=yes"
+    # Options: "section=QSR_STR_SO:hash=sha1:exclude_range=0x1234-0x4568,100-201,0xffff0000-0xfffffff1:output_format=csv,json:output_suffix=reassign:gzip=yes:debug=yes:clean_strings=yes"
     # For image.so this writes image.so.reassign.csv.gz,
     # image.so.reassign.json.gz, and image.so.reassign.debug.json.gz.
     #
