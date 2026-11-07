@@ -2108,12 +2108,10 @@ void ObjectLinker::createCopyRelocation(ResolveInfo &Sym,
 }
 
 void ObjectLinker::scanRelocationsHelper(InputFile *Input, bool IsPartialLink,
-                                         LinkerScript::PluginVectorT PVect,
                                          Relocator::CopyRelocs &CopyRelocs) {
   ELFObjectFile *ObjFile = llvm::dyn_cast<ELFObjectFile>(Input);
   if (!ObjFile)
     return;
-  uint32_t NumPlugins = PVect.size();
   for (auto &Rs : ObjFile->getRelocationSections()) {
     if (Rs->isIgnore())
       continue;
@@ -2123,10 +2121,6 @@ void ObjectLinker::scanRelocationsHelper(InputFile *Input, bool IsPartialLink,
       // Skip unneeded relocations
       if (getTargetBackend().maySkipRelocProcessing(Relocation))
         continue;
-      if (NumPlugins) {
-        for (auto &P : PVect)
-          P->callReloc(Relocation->type(), Relocation);
-      }
       if (Relocation->isPluginOwned())
         continue;
       ELFSection *RelocSection = Rs;
@@ -2158,6 +2152,27 @@ bool ObjectLinker::scanRelocations(bool IsPartialLink) {
 
   getTargetBackend().provideSymbols();
 
+  // Preserve serial callback order. Callbacks may discard later sections or
+  // add relocations to them; all claims must finish before scanning starts.
+  if (!PluginVect.empty()) {
+    for (InputFile *Input : ThisModule->getObjectList()) {
+      const auto *ObjFile = llvm::dyn_cast<ELFObjectFile>(Input);
+      if (!ObjFile)
+        continue;
+      for (ELFSection *Rs : ObjFile->getRelocationSections()) {
+        if (Rs->isIgnore() || Rs->isDiscard())
+          continue;
+        for (Relocation *R : Rs->getLink()->getRelocations()) {
+          if (getTargetBackend().maySkipRelocProcessing(R))
+            continue;
+          for (Plugin *P : PluginVect)
+            P->callReloc(R->type(), R);
+        }
+      }
+    }
+  }
+  ThisModule->closePluginRelocationClaims();
+
   std::vector<std::unique_ptr<Relocator::CopyRelocs>> AllCopyRelocs;
   if (ThisConfig.options().numThreads() <= 1 ||
       !ThisConfig.isScanRelocationsMultiThreaded()) {
@@ -2165,7 +2180,7 @@ bool ObjectLinker::scanRelocations(bool IsPartialLink) {
       ThisConfig.raise(Diag::threads_disabled) << "ScanRelocations";
     for (auto &Input : ThisModule->getObjectList()) {
       auto CopyRelocs = std::make_unique<Relocator::CopyRelocs>();
-      scanRelocationsHelper(Input, IsPartialLink, PluginVect, *CopyRelocs);
+      scanRelocationsHelper(Input, IsPartialLink, *CopyRelocs);
       AllCopyRelocs.push_back(std::move(CopyRelocs));
     }
   } else {
@@ -2176,9 +2191,8 @@ bool ObjectLinker::scanRelocations(bool IsPartialLink) {
     for (auto &Input : ThisModule->getObjectList()) {
       auto CopyRelocs = std::make_unique<Relocator::CopyRelocs>();
       auto &CopyRelocsRef = *CopyRelocs; // must dereference in the main thread
-      Pool->async([&] {
-        scanRelocationsHelper(Input, IsPartialLink, PluginVect, CopyRelocsRef);
-      });
+      Pool->async(
+          [&] { scanRelocationsHelper(Input, IsPartialLink, CopyRelocsRef); });
       AllCopyRelocs.push_back(std::move(CopyRelocs));
     }
     Pool->wait();

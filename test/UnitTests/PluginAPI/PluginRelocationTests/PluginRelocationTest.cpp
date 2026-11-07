@@ -133,7 +133,7 @@ TEST_F(PluginRelocationTest, ConcurrentClaimAndForeignOverrideAreExclusive) {
   std::thread Claimant([&] {
     AwaitStart();
     for (size_t I = 0; I < Count; ++I) {
-      Claimed[I] = Module.claimRelocation(&Relocs[I], &Owner);
+      Claimed[I] = bool(Module.claimRelocation(&Relocs[I], &Owner));
       if (Claimed[I]) {
         eld::plugin::Use U(&Relocs[I]);
         EXPECT_TRUE(Owner.setTargetDataForUse(U, 0x123456789abcdef0));
@@ -163,6 +163,40 @@ TEST_F(PluginRelocationTest, ConcurrentClaimAndForeignOverrideAreExclusive) {
     EXPECT_EQ(Data, Claimed[I] ? 0x123456789abcdef0ULL : 0xaaaaaaaaaaaaaaaaULL)
         << I;
   }
+}
+
+TEST_F(PluginRelocationTest, ClaimsCloseBeforeScanning) {
+  eld::Relocation Claimed, Late;
+  ASSERT_TRUE(Module.claimRelocation(&Claimed, &Owner));
+  Module.closePluginRelocationClaims();
+  EXPECT_FALSE(Module.claimRelocation(&Late, &Owner));
+  EXPECT_FALSE(Late.isPluginOwned());
+  eld::plugin::Use U(&Claimed);
+  ASSERT_TRUE(Owner.setTargetDataForUse(U, 0x12345678));
+  ASSERT_TRUE(Owner.setTargetDataForUse(U, 0x87654321));
+  uint64_t Data = 0;
+  ASSERT_TRUE(Module.getRelocationData(&Claimed, Data));
+  EXPECT_EQ(Data, 0x87654321U);
+}
+
+TEST_F(PluginRelocationTest, ValidationClosesReplacementWrites) {
+  eld::Relocation R, Late;
+  eld::plugin::Use U(&R);
+  ASSERT_TRUE(Owner.setTargetDataForUse(U, 0x12345678));
+  EXPECT_TRUE(Module.validatePluginRelocations());
+  EXPECT_FALSE(Owner.setTargetDataForUse(U, 0x87654321));
+  EXPECT_FALSE(Module.claimRelocation(&Late, &Owner));
+  EXPECT_FALSE(Late.isPluginOwned());
+  uint64_t Data = 0;
+  ASSERT_TRUE(Module.getRelocationData(&R, Data));
+  EXPECT_EQ(Data, 0x12345678U);
+  EXPECT_FALSE(Module.validatePluginRelocations());
+  EXPECT_FALSE(Diag.diagnose());
+  EXPECT_GE(Diag.getPrinter()->getNumErrors(), 2U);
+}
+
+TEST_F(PluginRelocationTest, NullUseCannotBeClaimed) {
+  EXPECT_FALSE(Owner.claimUse(eld::plugin::Use(nullptr)));
 }
 
 } // namespace

@@ -817,32 +817,33 @@ uint64_t Module::getImageLayoutChecksum() const {
   return Hash;
 }
 
-bool Module::setRelocationData(const eld::Relocation *R, uint64_t Data,
-                               plugin::LinkerWrapper *Owner) {
+eld::Expected<void> Module::setRelocationData(const eld::Relocation *R,
+                                              uint64_t Data,
+                                              plugin::LinkerWrapper *Owner) {
   std::lock_guard<std::mutex> Guard(Mutex);
-  // Serialize the ownership check with both claims and data insertion. A
-  // concurrent claim must not let another plugin supply the winning value.
-  auto It = PluginRelocations.find(R);
-  if (It != PluginRelocations.end() && It->second != Owner) {
-    HasPluginRelocationDataConflict = true;
-    return false;
-  }
+  auto Fail = [&](const char *Reason) -> eld::Expected<void> {
+    PluginRelocationDataError = Reason;
+    // After validation there is no later ownership check to report this.
+    if (PluginRelocationDataClosed)
+      getConfig().raise(Diag::error_plugin_owned_use) << Reason;
+    return std::make_unique<plugin::DiagnosticEntry>(
+        Diag::error_plugin_owned_use, std::vector<std::string>{Reason});
+  };
+  if (PluginRelocationDataClosed)
+    return Fail("relocation application has started");
   // An unclaimed replacement also belongs to its first writer. Only that
   // writer may update the value.
-  auto [DataIt, Inserted] =
-      RelocationData.try_emplace(R, RelocationDataEntry{Data, Owner});
-  if (!Inserted && DataIt->second.Owner != Owner) {
-    HasPluginRelocationDataConflict = true;
-    return false;
-  }
-  DataIt->second.Data = Data;
+  auto [It, Inserted] = PluginRelocations.try_emplace(R, Owner);
+  if (!Inserted && It->second != Owner)
+    return Fail("replacement supplied by a different plugin");
+  RelocationData[R] = Data;
   // The arena allocator and layout-map containers also need serialization
   // when plugins submit replacement data from worker threads.
   if (LayoutInfo *Printer = getLayoutInfo()) {
     auto *Op = eld::make<RelocationDataPluginOp>(Owner, R);
     Printer->recordRelocationData(Owner, Op);
   }
-  return true;
+  return {};
 }
 
 bool Module::getRelocationData(const eld::Relocation *R, uint64_t &Data) {
@@ -855,35 +856,52 @@ bool Module::getRelocationDataForSync(const eld::Relocation *R,
   auto It = RelocationData.find(R);
   if (It == RelocationData.end())
     return false;
-  Data = It->second.Data;
+  Data = It->second;
   return true;
 }
 
-bool Module::claimRelocation(eld::Relocation *R,
-                             const plugin::LinkerWrapper *Owner) {
+eld::Expected<void>
+Module::claimRelocation(eld::Relocation *R,
+                        const plugin::LinkerWrapper *Owner) {
   std::lock_guard<std::mutex> Guard(Mutex);
-  if (RelocationData.count(R) ||
-      !PluginRelocations.try_emplace(R, Owner).second) {
-    HasPluginRelocationClaimConflict = true;
-    return false;
+  auto Fail = [&](const char *Reason) -> eld::Expected<void> {
+    PluginRelocationClaimError = Reason;
+    if (PluginRelocationDataClosed)
+      getConfig().raise(Diag::error_plugin_owned_use) << Reason;
+    return std::make_unique<plugin::DiagnosticEntry>(
+        Diag::error_plugin_owned_use, std::vector<std::string>{Reason});
+  };
+  if (PluginRelocationClaimsClosed)
+    return Fail("relocation scanning has started");
+  if (!PluginRelocations.try_emplace(R, Owner).second) {
+    return Fail("relocation already owned or overridden by a plugin");
   }
   R->setPluginOwned();
-  return true;
+  return {};
+}
+
+void Module::closePluginRelocationClaims() {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  PluginRelocationClaimsClosed = true;
 }
 
 bool Module::validatePluginRelocations() {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  PluginRelocationClaimsClosed = true;
+  PluginRelocationDataClosed = true;
   // Report conflicts at the application boundary even when a plugin ignored
   // its failed API result. Plugins that report errors stop the link earlier.
-  bool Valid =
-      !HasPluginRelocationClaimConflict && !HasPluginRelocationDataConflict;
-  if (HasPluginRelocationClaimConflict)
+  bool Valid = !PluginRelocationClaimError && !PluginRelocationDataError;
+  if (PluginRelocationClaimError)
     getConfig().raise(Diag::error_plugin_owned_use)
-        << "relocation already owned or overridden by a plugin";
-  if (HasPluginRelocationDataConflict)
+        << PluginRelocationClaimError;
+  if (PluginRelocationDataError)
     getConfig().raise(Diag::error_plugin_owned_use)
-        << "replacement supplied by a different plugin";
+        << PluginRelocationDataError;
   for (const auto &Entry : PluginRelocations) {
     const Relocation *R = Entry.first;
+    if (!R->isPluginOwned())
+      continue;
     const ELFSection *S = R->targetRef()->frag()->getOwningSection();
     if (S->isIgnore() || S->isDiscard() ||
         (S->getOutputSection() && S->getOutputSection()->isDiscard()))

@@ -10,6 +10,7 @@
 #include "PointerReloc.h"
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace eld::plugin;
@@ -37,6 +38,13 @@ public:
     if (U.getName() != "data")
       return;
     std::lock_guard<std::mutex> Guard(Mutex);
+    if (CallbackThread == std::thread::id())
+      CallbackThread = std::this_thread::get_id();
+    else if (CallbackThread != std::this_thread::get_id()) {
+      getLinker()->getDiagnosticBuilder(
+          getLinker()->getErrorDiagID("relocation callbacks are not serial"));
+      return;
+    }
     if (Mode == "unclaimed-data" || Mode == "claimed-data") {
       if (Mode == "claimed-data") {
         auto Result = getLinker()->claimUse(U);
@@ -59,6 +67,8 @@ public:
         auto Result = getLinker()->claimUse(Previous);
         if (!Result)
           getLinker()->reportDiagEntry(std::move(Result.error()));
+        else
+          Uses.push_back(Previous);
       }
       Previous = U;
       return;
@@ -90,6 +100,7 @@ public:
 
 private:
   std::mutex Mutex;
+  std::thread::id CallbackThread;
   std::string Mode;
   std::vector<Use> Uses;
   Use Previous{nullptr};

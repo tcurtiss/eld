@@ -1,6 +1,6 @@
 # REQUIRES: hexagon || arm || aarch64 || riscv32 || riscv64
-# ELD delivers relocation callbacks from the scanning workers.
-# Each worker may claim its current use, and all four claims must be retained.
+# ELD delivers relocation callbacks serially before starting scan workers.
+# All four claims and their replacement operations must be retained.
 RUN: %clang %clangopts -c %p/Inputs/pointer.c -o %t.main.o
 RUN: %clang %clangopts -DREFERENCE=reference1 -c %p/Inputs/reference.c -o %t.one.o
 RUN: %clang %clangopts -DREFERENCE=reference2 -c %p/Inputs/reference.c -o %t.two.o

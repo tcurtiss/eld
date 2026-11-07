@@ -21,20 +21,22 @@ address calculation or stored pointer with an absolute value: normal scanning
 could otherwise allocate a GOT or PLT slot or a dynamic relocation that would
 change the replacement at runtime.
 
-Register the relevant relocation types with ``registerReloc`` in
-``LinkerPluginConfig::Init``. Inspect each ``Use`` in ``RelocCallBack`` and call
-``claimUse`` for the current ``Use`` on that callback's thread. A saved ``Use``
-cannot be claimed later or from a plugin worker thread. ELD runs each
-callback immediately before scanning that relocation. When parallel scanning
-is enabled, callbacks for different input files may run concurrently; plugins
-must synchronize their shared state. The API does not permit moving a claim
-to a different thread.
+Call ``claimUse`` from an early plugin hook after relocations are available,
+for example ``LinkerPlugin::ActBeforeRuleMatching``, or from ``RelocCallBack``.
+An early hook can enumerate uses with ``getUses``; callback registration is not
+required. Alternatively, register relevant types with ``registerReloc`` in
+``LinkerPluginConfig::Init`` to receive uses during the serial callback prepass.
+Claims can target any eligible use, not just the current callback's use, and
+joined plugin worker tasks may claim uses. ELD closes the claim window after
+the prepass, before starting target scanning, even when no callbacks ran.
+Output-section ``BeforeLayout`` and subsequent hooks are too late to claim.
 
 Claims are supported during final links for executables, shared libraries,
 and PIEs. The source must have a complete relocation storage field with a
 nonzero width of at most eight bytes in a PROGBITS chunk. Partial links,
-duplicate claims (including a second claim by the same plugin), and claims for
-uses with an existing replacement from ``setTargetDataForUse`` are rejected.
+late claims, duplicate claims (including a second claim by the same plugin),
+and claims for uses with an existing replacement from ``setTargetDataForUse``
+are rejected.
 Check each API result and report errors through the plugin diagnostic framework.
 
 For each claimed use that survives into the output, the owning plugin must
@@ -47,10 +49,12 @@ another plugin are rejected, even when the proposed bytes are identical.
 Conflicting claims and writes cause a link error even if the plugin ignores
 the returned error: ELD diagnoses unreported conflicts before relocation
 application. Check and report each API result so errors can be diagnosed
-earlier. Replacement calls are thread-safe, including layout-map bookkeeping;
-workers launched by an overridden plugin callback must finish before that
-callback returns. Missing data and NOLOAD/NOBITS output storage are diagnosed
-before relocation application.
+earlier. Replacement data and layout-map bookkeeping are serialized together.
+Finish all worker tasks before returning from the plugin hook. ELD closes
+replacement writes when validation/application begins; later setter calls
+fail rather than accepting data that cannot affect the output. Missing data
+and NOLOAD/NOBITS output storage are diagnosed for surviving claims before
+relocation application; discarded claims do not require replacement data.
 
 ELD skips normal target scanning and application for claimed uses. Those uses
 do not reserve GOT/PLT entries or dynamic relocations and are omitted from
@@ -93,9 +97,9 @@ Relocation replacement data
 ``LinkerWrapper::setTargetDataForUse(Use &U, uint64_t Data)`` supplies complete
 instruction or data bytes for a relocation's storage field, not an unencoded
 operand. The first accepted replacement belongs to its writing plugin. Later
-successful calls by that plugin update the replacement; writes by a different
-plugin return an error and cause a link error even if ignored. A null use
-returns an error.
+successful calls by that plugin update the replacement; the last accepted
+value is used. Writes by a different plugin return an error and cause a link
+error even if ignored. A null use returns an error.
 
 Plugins may submit replacement data from worker threads, including when a
 layout map is enabled. Ownership checks, replacement updates, allocation of
@@ -106,8 +110,8 @@ that callback returns, for example ``OutputSectionIteratorPlugin::Run()``
 during ``AfterLayout``. This does not require all tasks to finish before an
 individual ``setTargetDataForUse()`` call returns. Other plugin APIs and
 concurrent layout-map reads are not covered by this guarantee.
-Replacing storage bytes does not suppress normal relocation scanning or
-allocation of GOT/PLT entries and dynamic relocations.
+Without ``claimUse``, replacing storage bytes does not suppress normal
+relocation scanning or allocation of GOT/PLT entries and dynamic relocations.
 
 Plugin Abstract Data Types
 -----------------------------

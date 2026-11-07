@@ -474,24 +474,25 @@ public:
   eld::Expected<void> registerReloc(uint32_t RelocType,
                                     const std::string &Name = "");
 
-  /// Take responsibility for the final bytes of U. Only valid for the Use
-  /// currently being delivered to this plugin's RelocCallBack, on the callback
-  /// thread, during a final link (executable, shared library, or PIE).
-  /// ELD callbacks run before each relocation is scanned and may run
-  /// concurrently for different input files when parallel scanning is enabled.
-  /// The source must contain a complete, nonzero-width relocation storage field
-  /// of at most sizeof(uint64_t) bytes in a PROGBITS chunk. Partial links,
-  /// duplicate claims, and claims after replacement data was supplied are
-  /// rejected. Normal relocation scanning and application are skipped, so this
-  /// Use does not allocate GOT/PLT entries or dynamic relocations. GC
-  /// dependencies and the original Use metadata are retained. The owning plugin
-  /// must call setTargetDataForUse before relocation application; missing data
-  /// for a surviving Use or NOLOAD/NOBITS output storage is an error. Claimed
-  /// Uses are omitted from --emit-relocs because their final bytes no longer
-  /// require relocation. The plugin must validate the instruction pattern and
-  /// account for target relaxation. This claims only U; setSymbolAddress does
-  /// not implicitly claim any Uses. Conflicting claims cause a link error even
-  /// if the returned error is ignored.
+  /// Take responsibility for the final bytes of U during a final link
+  /// (executable, shared library, or PIE), before target scanning starts.
+  /// Claims may be made from an early plugin hook or a RelocCallBack, including
+  /// joined worker tasks. Relocation callback registration is not required.
+  /// ELD runs callbacks in a serial prepass, then closes claims before
+  /// scanning. Output-section BeforeLayout and subsequent hooks are too late to
+  /// claim. The source must contain a complete, nonzero-width relocation
+  /// storage field of at most sizeof(uint64_t) bytes in a PROGBITS chunk.
+  /// Partial links, duplicate claims, and claims after replacement data was
+  /// supplied are rejected. Normal relocation scanning and application are
+  /// skipped, so this Use does not allocate GOT/PLT entries or dynamic
+  /// relocations. GC dependencies and the original Use metadata are retained.
+  /// The owning plugin must call setTargetDataForUse before relocation
+  /// application; missing data for a surviving Use or NOLOAD/NOBITS output
+  /// storage is an error. Claimed Uses are omitted from --emit-relocs because
+  /// their final bytes no longer require relocation. The plugin must validate
+  /// the instruction pattern and account for target relaxation. This claims
+  /// only U; setSymbolAddress does not implicitly claim any Uses. Conflicting
+  /// claims cause a link error even if the returned error is ignored.
   eld::Expected<void> claimUse(Use U);
 
   /// Return whether S can be interposed under the current link configuration.
@@ -638,15 +639,16 @@ public:
   /// accepted value is used. A different plugin's write is rejected, even
   /// without a claim, and causes a link error even if the returned error is
   /// ignored. For a claimed Use, only the owning plugin may supply replacement
-  /// data, before relocation application. Without claimUse, normal relocation
-  /// scanning and GOT/PLT/dynamic relocation allocation still occur.
+  /// data. Writes are rejected once validation/application begins.
+  /// Without claimUse, normal relocation scanning and GOT/PLT/dynamic
+  /// relocation allocation still occur.
   /// The value contains complete instruction/data bytes for the storage field,
-  /// not an unencoded operand for the linker to apply. Calls are thread-safe,
-  /// including layout-map bookkeeping. All worker tasks launched by an
-  /// overridden plugin callback must finish before that callback returns, for
-  /// example OutputSectionIteratorPlugin::Run() during AfterLayout. This
-  /// guarantee does not extend to other plugin APIs or concurrent layout-map
-  /// reads.
+  /// not an unencoded operand for the linker to apply.
+  /// Calls are thread-safe, including layout-map bookkeeping. All worker tasks
+  /// launched by an overridden plugin callback must finish before that
+  /// callback returns, for example OutputSectionIteratorPlugin::Run() during
+  /// AfterLayout. This guarantee does not extend to other plugin APIs or
+  /// concurrent layout-map reads.
   eld::Expected<void> setTargetDataForUse(Use &U, uint64_t Data);
 
   /// Returns the 32-bit checksum of the image layout if this function is
@@ -956,11 +958,6 @@ private:
   bool reportDiag(DiagnosticBuilder &diagBuilder) const { return true; }
 
 private:
-  // Callback context is per thread, not per relocation or linker instance.
-  static thread_local LinkerWrapper *RelocationCallbackOwner;
-  static thread_local eld::Relocation *RelocationCallbackUse;
-  friend class eld::Plugin;
-
   eld::Module &m_Module;
   eld::Plugin *m_Plugin;
 
