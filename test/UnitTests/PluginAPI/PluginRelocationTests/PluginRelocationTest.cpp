@@ -34,6 +34,44 @@ protected:
   eld::plugin::LinkerWrapper Other{nullptr, Module};
 };
 
+TEST_F(PluginRelocationTest, ClaimDoesNotSupplyReplacementData) {
+  eld::Relocation R, Unclaimed;
+  R.setTargetData(0x12345678);
+  uint64_t Data = 0x87654321;
+  EXPECT_FALSE(Module.getRelocationData(&Unclaimed, Data));
+  EXPECT_EQ(Data, 0x87654321U);
+  ASSERT_TRUE(Module.claimRelocation(&R, &Owner));
+  EXPECT_TRUE(R.isPluginOwned());
+  EXPECT_FALSE(Module.getRelocationData(&R, Data));
+  EXPECT_EQ(Data, 0x87654321U);
+  EXPECT_FALSE(Module.getRelocationDataForSync(&R, Data));
+  EXPECT_EQ(Data, 0x87654321U);
+  eld::plugin::Use U(&R);
+  ASSERT_TRUE(Owner.getTargetDataForUse(U, Data));
+  EXPECT_EQ(Data, 0x12345678U);
+  ASSERT_TRUE(Owner.setTargetDataForUse(U, 0));
+  ASSERT_TRUE(Module.getRelocationData(&R, Data));
+  EXPECT_EQ(Data, 0U);
+  Data = 1;
+  ASSERT_TRUE(Module.getRelocationDataForSync(&R, Data));
+  EXPECT_EQ(Data, 0U);
+}
+
+TEST_F(PluginRelocationTest, ZeroOverrideHasReplacementData) {
+  eld::Relocation R;
+  R.setTargetData(0x12345678);
+  eld::plugin::Use U(&R);
+  ASSERT_TRUE(Owner.setTargetDataForUse(U, 0));
+  EXPECT_FALSE(R.isPluginOwned());
+  uint64_t Data = 1;
+  ASSERT_TRUE(Module.getRelocationData(&R, Data));
+  EXPECT_EQ(Data, 0U);
+  Data = 1;
+  ASSERT_TRUE(Owner.getTargetDataForUse(U, Data));
+  EXPECT_EQ(Data, 0U);
+  EXPECT_TRUE(Module.validatePluginRelocations());
+}
+
 TEST_F(PluginRelocationTest, OnlyOwnerCanSupplyClaimedData) {
   eld::Relocation R;
   eld::plugin::Use U(&R);

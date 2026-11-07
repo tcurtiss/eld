@@ -18,8 +18,8 @@
 #define ELD_CORE_MODULE_H
 
 #include "eld/Config/GeneralOptions.h"
-#include "eld/Core/Linker.h"
 #include "eld/Core/LinkState.h"
+#include "eld/Core/Linker.h"
 #include "eld/Input/InputFile.h"
 #include "eld/LayoutMap/LayoutInfo.h"
 #include "eld/Plugin/PluginActivityLog.h"
@@ -40,6 +40,7 @@
 #include <array>
 #include <climits>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -712,9 +713,13 @@ private:
   // ----------------- Use/Def support for linker script --------------
   std::unordered_set<std::string> VisitedAssignments;
   // ----------------- Relocation Data set by plugins ------------------
-  std::unordered_map<const eld::Relocation *, uint64_t> RelocationData;
-  llvm::DenseMap<const eld::Relocation *, const plugin::LinkerWrapper *>
-      PluginRelocations;
+  struct RelocationDataEntry {
+    const plugin::LinkerWrapper *Owner;
+    // A claim records ownership before replacement data is available.
+    std::optional<uint64_t> Data;
+  };
+  std::unordered_map<const eld::Relocation *, RelocationDataEntry>
+      RelocationData;
   bool PluginRelocationClaimsClosed = false;
   bool PluginRelocationDataClosed = false;
   const char *PluginRelocationClaimError = nullptr;

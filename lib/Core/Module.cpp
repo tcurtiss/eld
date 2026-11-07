@@ -833,10 +833,11 @@ eld::Expected<void> Module::setRelocationData(const eld::Relocation *R,
     return Fail("relocation application has started");
   // An unclaimed replacement also belongs to its first writer. Only that
   // writer may update the value.
-  auto [It, Inserted] = PluginRelocations.try_emplace(R, Owner);
-  if (!Inserted && It->second != Owner)
+  auto [It, Inserted] =
+      RelocationData.try_emplace(R, RelocationDataEntry{Owner, std::nullopt});
+  if (!Inserted && It->second.Owner != Owner)
     return Fail("replacement supplied by a different plugin");
-  RelocationData[R] = Data;
+  It->second.Data = Data;
   // The arena allocator and layout-map containers also need serialization
   // when plugins submit replacement data from worker threads.
   if (LayoutInfo *Printer = getLayoutInfo()) {
@@ -854,9 +855,9 @@ bool Module::getRelocationData(const eld::Relocation *R, uint64_t &Data) {
 bool Module::getRelocationDataForSync(const eld::Relocation *R,
                                       uint64_t &Data) {
   auto It = RelocationData.find(R);
-  if (It == RelocationData.end())
+  if (It == RelocationData.end() || !It->second.Data)
     return false;
-  Data = It->second;
+  Data = *It->second.Data;
   return true;
 }
 
@@ -873,7 +874,8 @@ Module::claimRelocation(eld::Relocation *R,
   };
   if (PluginRelocationClaimsClosed)
     return Fail("relocation scanning has started");
-  if (!PluginRelocations.try_emplace(R, Owner).second) {
+  if (!RelocationData.try_emplace(R, RelocationDataEntry{Owner, std::nullopt})
+           .second) {
     return Fail("relocation already owned or overridden by a plugin");
   }
   R->setPluginOwned();
@@ -898,7 +900,7 @@ bool Module::validatePluginRelocations() {
   if (PluginRelocationDataError)
     getConfig().raise(Diag::error_plugin_owned_use)
         << PluginRelocationDataError;
-  for (const auto &Entry : PluginRelocations) {
+  for (const auto &Entry : RelocationData) {
     const Relocation *R = Entry.first;
     if (!R->isPluginOwned())
       continue;
@@ -911,7 +913,7 @@ bool Module::validatePluginRelocations() {
           << ("source has no output file storage: " +
               R->getSourcePath(getConfig().options()));
       Valid = false;
-    } else if (!RelocationData.count(R)) {
+    } else if (!Entry.second.Data) {
       getConfig().raise(Diag::error_plugin_owned_use_missing_data)
           << R->getSourcePath(getConfig().options())
           << llvm::utohexstr(R->targetRef()->offset());
