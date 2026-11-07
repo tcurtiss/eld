@@ -2,11 +2,13 @@
 # See https://github.com/qualcomm/eld/LICENSE.txt for license information.
 # SPDX-License-Identifier: BSD-3-Clause
 #
-# Annotated example, copied beside the built ReassignSectionAddresses library.
+# Runnable plugin documentation, copied beside the built library. The option
+# descriptions here and in README.md describe the same configuration contract.
 # Copy and customize this file; rebuilding refreshes the build-directory copy.
 # Usage: ld.eld ... -L <plugin-directory> --plugin-config <your-config.yaml>
 # The linker script must place the selected sections in DSECT, COPY, INFO, or
 # OVERLAY output sections. Assigned addresses are IDs, not dereferenceable data.
+# Enable this plugin only for the final link; plugin-enabled -r links fail.
 #
 # YAML supports whole-line and inline # comments outside quoted strings.
 # Options is ONE colon-delimited string, not separate YAML keys. Do not put
@@ -23,7 +25,8 @@ GlobalPlugins:
     # hash=md5|sha1|seq (default md5): assign 32-bit IDs from symbol contents.
     # Identical contents share IDs across all selected sections in this instance.
     # MD5/SHA1 hash the original bytes, including a trailing NUL; seq ignores
-    # one trailing NUL. Distinct-content collisions and exclusions try successive
+    # one trailing NUL. MD5/SHA1 first try the lower 32 bits. If excluded or
+    # assigned to different contents, these hash modes try successive
     # 32-bit digest slices in 8-bit steps (13 MD5 positions, 17 SHA1 positions).
     # If no usable slice remains, the link fails. Input order can affect fallback.
     #
@@ -42,17 +45,33 @@ GlobalPlugins:
     # output_format=none|csv|json|csv,json (default none): mapping output formats.
     # One file per format per image, containing every selected section. CSV IDs
     # are 0xXXXXXXXX; JSON IDs are decimal numbers. This example enables both.
+    # csv,json and json,csv are equivalent; duplicates are ignored. none must
+    # appear alone; unknown formats and empty list items fail the link.
+    # Mapping JSON has schema_version 1; debug=yes does not modify that schema.
+    # output_format=none disables mappings but still permits separate debug JSON.
     #
     # output_suffix=<name> (default reassign): output filename component.
-    # Files are <linker-output>.<output_suffix>.csv, .json, and .debug.json.
+    # Each enabled file retains the complete linker output path and extension:
+    # CSV mapping: <linker-output>.<output_suffix>.csv
+    # JSON mapping: <linker-output>.<output_suffix>.json
+    # Debug JSON:  <linker-output>.<output_suffix>.debug.json
+    # For image.so and output_suffix=ids, debug is image.so.ids.debug.json,
+    # NOT image.so.ids.json.debug.json. The suffix does not enable any output.
     # Keep it nonempty, without path separators or control bytes.
     #
     # gzip=yes|no (default no): compress ALL enabled output files; append .gz.
     # Uncompressed copies are not generated when gzip=yes.
     #
-    # debug=yes|no (default no): one JSON file with per-section symbol names,
-    # original/assigned addresses, raw bytes, and relocation provenance.
-    # Independent of output_format and linker tracing; gzip applies here too.
+    # debug=yes|no (default no): a SEPARATE JSON file with schema_version 3,
+    # grouping symbol names, original/assigned addresses, raw bytes, and
+    # relocation provenance by section. Does NOT enable mapping JSON or extend
+    # its schema. Independent of output_format and linker tracing.
+    # Default filename for image.so: image.so.reassign.debug.json.
+    # output_suffix=ids changes this to image.so.ids.debug.json;
+    # gzip=yes adds .gz, giving image.so.ids.debug.json.gz.
+    # Includes every modified object symbol, even duplicates or unreferenced
+    # symbols; those without claimed references have an empty relocations array.
+    # No debug file is generated if no object symbols were modified.
     #
     # clean_strings=yes|no (default no): for mapping strings only, keep printable
     # ASCII and tabs, remove CR/LF and other control/non-ASCII bytes, and trim
@@ -66,3 +85,10 @@ GlobalPlugins:
 
     # Alternative with reserved IDs and compressed mapping/debug outputs:
     # Options: "section=QSR_STR_SO:hash=sha1:exclude_range=0x1234-0x4567,100-200,0xffff0000-0xfffffff0:output_format=csv,json:output_suffix=reassign:gzip=yes:debug=yes:clean_strings=yes"
+    # For image.so this writes image.so.reassign.csv.gz,
+    # image.so.reassign.json.gz, and image.so.reassign.debug.json.gz.
+    #
+    # Debug only, with a custom suffix and no mapping files:
+    # Options: "section=.dedup:hash=md5:output_format=none:output_suffix=ids:debug=yes"
+    # For image.so this writes only image.so.ids.debug.json. Add gzip=yes to
+    # write image.so.ids.debug.json.gz instead.
