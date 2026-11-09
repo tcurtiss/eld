@@ -1,0 +1,31 @@
+# Dependencies (none today, but keep them out if added)
+node_modules/
+
+# Generated samples: npm run sample and gen-sample.js write here.
+# Only the small reference export is tracked.
+samples/*
+!samples/sample-20k.columnar.json.gz
+
+# Local builds and test output (dist/image-anatomy.html is tracked)
+dist/*
+!dist/image-anatomy.html
+screenshots/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Personal Claude Code settings
+.claude/settings.local.json
+
+# Presentation captures and draft decks (tools/capture.py, tools/make-deck.js)
+presentation/

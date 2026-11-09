@@ -1,0 +1,21 @@
+{
+  "name": "image-anatomy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-file dashboard for the anatomy of a large linked firmware image: size, compression, eliminated code, ownership and connectivity.",
+  "scripts": {
+    "build": "node tools/build.js",
+    "check": "node tools/check.js && node tools/check-details.js && node tools/check-relationships.js",
+    "sample": "node tools/gen-sample.js",
+    "lint": "eslint ."
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "pptxgenjs": "^4.0.1"
+  }
+}

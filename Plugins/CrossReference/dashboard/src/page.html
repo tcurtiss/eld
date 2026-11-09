@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Modem Image Proctologist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#E9EEF2;--surface:#FFFFFF;--ink:#16202A;--ink-2:#4B5967;--ink-3:#7D8A97;--rule:#C9D2DA;--hatch:rgba(22,32,42,.16);
+  --accent:#C0186A;--accent-soft:rgba(192,24,106,.10);--in:#4F6F94;--out:#2A9384;
+  --sans:"Archivo","Helvetica Neue",Arial,system-ui,sans-serif;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0F151B;--surface:#172029;--ink:#E4EAF0;--ink-2:#A3B0BC;--ink-3:#73818E;--rule:#2B3743;--hatch:rgba(228,234,240,.13);
+  --accent:#FF5FA8;--accent-soft:rgba(255,95,168,.14);--in:#7FA2CC;--out:#4CC1B0;color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --paper:#0F151B;--surface:#172029;--ink:#E4EAF0;--ink-2:#A3B0BC;--ink-3:#73818E;--rule:#2B3743;--hatch:rgba(228,234,240,.13);
+  --accent:#FF5FA8;--accent-soft:rgba(255,95,168,.14);--in:#7FA2CC;--out:#4CC1B0;color-scheme:dark;}
+*,*::before,*::after{box-sizing:inherit}
+[hidden]{display:none!important}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.shell{max-width:1480px;margin:0 auto;padding:28px clamp(14px,3vw,40px) 72px}
+
+/* masthead */
+.mast{display:flex;flex-wrap:wrap;gap:20px 40px;align-items:flex-end;justify-content:space-between;margin-bottom:22px}
+h1{margin:0;font-stretch:125%;font-weight:780;font-size:clamp(30px,4.4vw,54px);line-height:1;letter-spacing:-.015em}
+.lede{margin:10px 0 0;max-width:64ch;color:var(--ink-2);font-size:16px}
+.dataset{margin:6px 0 0;font-size:14px;color:var(--ink-2)}
+.dataset strong{color:var(--ink);font-weight:620}
+.loadbox{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.loadrow{display:flex;gap:8px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--ink);background:var(--surface);border-radius:4px;padding:7px 14px;font-size:14px;font-weight:560;cursor:pointer}
+.btn[hidden]{display:none}
+.btn.primary{background:var(--ink);color:var(--surface)}
+.btn input{position:absolute;width:1px;height:1px;opacity:0}
+.btn:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+#loadMsg{margin:0;font-size:13px;color:var(--accent);max-width:46ch}
+
+/* hero memory map */
+.memmap-wrap{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:18px 22px 10px;margin-bottom:28px}
+.mem-row{display:grid;grid-template-columns:118px minmax(0,1fr);gap:14px;align-items:start;margin:6px 0 10px}
+.mem-label{font-stretch:125%;font-weight:760;font-size:22px;line-height:46px}
+.mem-label.small{font-size:15px;font-stretch:100%;font-weight:700;line-height:1.2;padding-top:6px}
+.mem-track{width:100%}
+.mem-bar{position:relative;height:46px;display:flex;border:1.5px solid var(--ink);border-radius:2px;overflow:hidden;background:repeating-linear-gradient(135deg,transparent 0 6px,var(--hatch) 6px 7px)}
+.mem-seg{position:relative;background:var(--c);height:100%;border:0;border-right:1px solid var(--surface);padding:0 6px 5px;display:flex;align-items:flex-end;color:#fff;font-size:12px;font-weight:600;font-stretch:85%;white-space:nowrap;overflow:hidden;cursor:pointer;flex:none}
+.mem-seg:hover{filter:brightness(1.08)}
+.mem-seg .ms-name{position:relative;text-shadow:0 1px 2px rgba(0,0,0,.45)}
+.mem-seg.pre{background-color:var(--c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.62) 0 3px,rgba(255,255,255,.18) 3px 6px)}
+.mem-seg .ms-live{position:absolute;left:0;top:0;bottom:0;background:var(--c)}
+.mem-bar.input{background:none;border-style:dashed}
+.mem-ticks{position:relative;height:16px;font-size:11px;color:var(--ink-3);font-stretch:85%}
+.mem-ticks span{position:absolute;top:2px;transform:translateX(-50%);white-space:nowrap}
+.mem-ticks span:first-child{transform:none}.mem-ticks span:last-child{transform:translateX(-100%)}
+.mem-meta{margin:2px 0 0;font-size:14px;color:var(--ink-2)}
+.mem-meta strong{color:var(--ink)}
+@media (max-width:560px){.mem-ticks span:nth-child(2),.mem-ticks span:nth-child(4){display:none}.mem-row{grid-template-columns:minmax(0,1fr);gap:4px}.mem-label{font-size:18px;line-height:1.3}.mem-seg .ms-name{display:none}}
+#heroFacts{margin:4px 0 6px;font-size:14px;color:var(--ink-2)}
+
+/* layout */
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:28px;align-items:start}
+.inspector{position:sticky;top:calc(env(safe-area-inset-top,0px) + 16px);background:var(--surface);border:1px solid var(--rule);border-top:4px solid var(--accent);border-radius:4px;padding:16px 18px 18px;max-height:calc(100vh - 32px);overflow:auto}
+@media (max-width:1100px){.layout{grid-template-columns:minmax(0,1fr)}.inspector{position:static;max-height:none}}
+.view{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:20px 22px 22px;margin-bottom:26px}
+.workspace-nav{position:sticky;top:0;z-index:8;display:flex;flex-wrap:wrap;gap:4px;margin:0 0 18px;padding:5px;background:var(--paper);border-bottom:1px solid var(--rule)}
+.workspace-tab{border:1px solid transparent;border-radius:4px;background:transparent;padding:9px 16px;cursor:pointer;font-weight:680;color:var(--ink-2)}
+.workspace-tab:hover{background:var(--surface);color:var(--ink)}
+.workspace-tab[aria-selected="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.workspace-panel,.view{scroll-margin-top:72px}
+.workspace-panel[hidden]{display:none}
+.workspace-subnav{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 16px;padding-bottom:10px;border-bottom:1px solid var(--rule)}
+.workspace-subtab{border:1px solid var(--rule);border-radius:999px;background:var(--surface);padding:6px 13px;cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)}
+.workspace-subtab:hover{border-color:var(--ink-2);color:var(--ink)}
+.workspace-subtab[aria-selected="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--ink)}
+.view-head{display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+h2{margin:0;font-size:22px;font-weight:700;font-stretch:112%;line-height:1.2;letter-spacing:-.005em}
+.q{margin:4px 0 0;color:var(--ink-2);font-size:14px;max-width:70ch}
+.take{margin:10px 0 14px;font-size:16px;max-width:76ch;font-weight:500}
+.ctrls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;max-width:100%}
+.seg{display:inline-flex;flex-wrap:wrap;max-width:100%;border:1px solid var(--rule);border-radius:18px;padding:2px;background:var(--paper)}
+.seg button{border:0;background:transparent;font-size:13px;padding:5px 12px;border-radius:999px;color:var(--ink-2);cursor:pointer;font-stretch:92%;font-weight:560}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--surface)}
+.ctrl-label{font-size:13px;color:var(--ink-3)}
+.scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.empty,.none{color:var(--ink-3);font-size:14px}
+
+/* treemap */
+#crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:14px;margin:0;flex:1 1 220px;min-width:0}
+#crumbs button{border:0;background:none;padding:2px 4px;color:var(--ink-2);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+#crumbs [aria-current]{font-weight:650;padding:2px 4px}
+#crumbs .sep{color:var(--ink-3)}
+#treemap svg{display:block}
+.tm-leaf{stroke:var(--surface);stroke-width:.5;cursor:pointer}
+.tm-leaf:hover{filter:brightness(1.12)}
+.tm-leaf-label{font-size:12px;fill:#fff;pointer-events:none;font-stretch:80%;font-weight:520}
+.tm-sub{fill:none;stroke:var(--surface);stroke-width:1.6;pointer-events:none}
+.tm-subhead{fill:var(--ink);fill-opacity:.42;cursor:pointer}
+.tm-sub-label{fill:#fff;font-size:12.5px;font-weight:700;pointer-events:none;font-stretch:85%;text-shadow:0 1px 1px rgba(0,0,0,.4)}
+.tm-group{fill:none;stroke:var(--ink);stroke-opacity:.55;stroke-width:1;pointer-events:none}
+.tm-head{fill:var(--ink);fill-opacity:.88;cursor:pointer}
+.tm-group-label{fill:var(--surface);font-size:13.5px;font-weight:650;pointer-events:none;font-stretch:90%}
+.tm-sel{fill:none;stroke:var(--accent);stroke-width:3;pointer-events:none}
+.tm-search-hit{stroke:var(--accent);stroke-width:3;filter:brightness(1.08)}
+.tm-search{display:flex;gap:8px;align-items:center;margin:0;flex:0 1 380px;min-width:200px}
+.tm-search label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.tm-search input{flex:1 1 auto;min-width:0;font:inherit;font-size:14px;padding:6px 9px;border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink)}
+.tm-search button{border:1px solid var(--ink);background:var(--ink);color:var(--surface);border-radius:4px;padding:6px 13px;font-size:14px;font-weight:600;cursor:pointer}
+.tm-search button:hover{filter:brightness(1.12)}
+.tm-search-msg{flex:1 1 100%;margin:0;color:var(--ink-2);font-size:13px}.tm-search-msg:empty{display:none}
+/* Treemap frame: navigation and tree structure above, size and color with their legend below. */
+.addr-stage{border:1px solid var(--rule);border-radius:4px;background:var(--paper);margin-top:8px;min-width:0}
+.addr-map{padding:8px 8px 4px}.addr-map canvas{display:block;cursor:crosshair}
+.addr-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px;border-top:1px solid var(--rule)}.addr-foot .legend{margin:0;flex:1 1 320px}
+.addr-table{border-collapse:collapse;font-size:13px;margin-top:14px;min-width:620px}.addr-table th,.addr-table td{text-align:right;padding:5px 10px;border-bottom:1px solid var(--rule)}
+.addr-table th:first-child,.addr-table td:first-child{text-align:left}.addr-table code{font-size:12px}
+.tm-stage{border:1px solid var(--rule);border-radius:4px;background:var(--paper);min-width:0;margin-top:8px}
+.tm-stage-bar{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px;border-bottom:1px solid var(--rule)}
+.tm-stage-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:8px;border-top:1px solid var(--rule)}
+.tm-stage-foot label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2)}
+.tm-stage-foot select{font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:5px 8px}
+.tm-stage-foot .legend{margin:0;flex:1 1 300px}
+.tm-tree summary{position:relative}.tm-tree-dot{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--accent);border:2px solid var(--surface)}.tm-tree-dot[hidden]{display:none}
+.tm-tree .ex-pop-body{box-sizing:border-box;width:min(380px,calc(100% - 16px));gap:14px;max-height:min(70vh,560px);overflow:auto}
+.tm-tree fieldset{border:0;margin:0;padding:0;display:grid;gap:6px}.tm-tree legend{font-weight:650;font-size:14px;padding:0;margin-bottom:4px}
+.tm-tree .q{margin:2px 0 0;font-size:12px}.tm-tree .q:empty{display:none}
+.tm-opt{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--rule);border-radius:4px;cursor:pointer;font-size:13px}
+.tm-opt:has(input:checked){border-color:var(--accent)}.tm-opt:has(input:disabled){opacity:.5;cursor:not-allowed}
+.tm-opt input{margin:3px 0 0;accent-color:var(--accent)}.tm-opt small{display:block;color:var(--ink-2);font-size:12px;margin-top:2px}
+@media(max-width:620px){.tm-search{flex:1 1 100%}.tm-stage-foot label{flex:1 1 140px}.tm-stage-foot select{flex:1 1 auto;min-width:0}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:13px;color:var(--ink-2)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.legend .hint{color:var(--ink-3)}
+.legend .ramp i{width:120px}
+
+/* inspector */
+.ins-pick{display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:13px;color:var(--ink-3)}
+.ins-pick select{flex:1;font:inherit;font-size:14px;padding:5px 8px;border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink)}
+.ins-name{display:flex;align-items:center;gap:10px;font-size:23px;font-stretch:118%;font-weight:760;margin:2px 0 12px;word-break:break-word}
+.ins-name i{flex:none;width:14px;height:14px;border-radius:2px}
+.ins-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin:0 0 14px}
+.ins-stats dt{font-size:12.5px;color:var(--ink-3)}
+.ins-stats dd{margin:0;font-size:18px;font-weight:650}
+.ins-impact{border-left:3px solid var(--accent);background:var(--accent-soft);padding:9px 12px;margin:0 0 14px;font-size:14px}
+.ins-impact p{margin:0}
+.ins-impact.dead{border-left-color:#8A3412;background:rgba(138,52,18,.09)}
+.ins-stats dd small{font-size:13px;font-weight:500;color:var(--ink-3)}
+.ins-k{font-weight:700;margin-bottom:2px!important}
+.inspector h3{font-size:14px;font-weight:700;margin:14px 0 6px}
+.bars,.syms{list-style:none;margin:0;padding:0}
+.bl{display:grid;grid-template-columns:minmax(0,118px) minmax(0,1fr) 34px;gap:8px;align-items:center;width:100%;border:0;background:none;padding:3px 0;cursor:pointer;text-align:left;font-size:13px}
+.bl:hover .bl-name{text-decoration:underline}
+.bl-name{display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bl-name i{flex:none;width:8px;height:8px;border-radius:1px}
+.bl-track{height:8px;background:var(--paper);border-radius:1px;overflow:hidden}
+.bl-bar{display:block;height:100%}.bl-bar.in{background:var(--in)}.bl-bar.out{background:var(--out)}
+.bl-val{text-align:right;color:var(--ink-2)}
+.syms li{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0;border-bottom:1px solid var(--rule)}
+.sym-name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.sym-val{flex:none;color:var(--ink-2)}
+.ins-group{font-size:14px;margin:0;color:var(--ink-2)}
+.ins-group strong{color:var(--ink)}
+
+/* retained */
+.ret-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:28px}
+@media (max-width:820px){.ret-grid{grid-template-columns:minmax(0,1fr)}}
+#retList,#deadMods,#deadIsl{list-style:none;margin:0;padding:0}
+.drow,.irow{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 72px;gap:12px;align-items:center;width:100%;border:0;border-bottom:1px solid var(--rule);background:none;padding:6px 4px;text-align:left;cursor:pointer}
+.irow{grid-template-columns:minmax(0,1fr) 72px}
+.drow:hover,.irow:hover{background:var(--paper)}
+.drow.is-sel{box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.d-track{display:flex;height:12px;width:var(--w)}
+.d-dead{display:block;height:100%;background-color:var(--c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.55) 0 2px,transparent 2px 5px)}
+.d-live{display:block;height:100%;background:var(--c);opacity:.25}
+.scatter{font-size:13px;color:var(--ink-2);padding:8px 4px}
+.dead-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:28px}
+@media (max-width:860px){.dead-grid{grid-template-columns:minmax(0,1fr)}}
+.linkbtn{border:0;background:none;padding:0;color:var(--ink);font-weight:600;text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:14px}
+.busy{position:fixed;inset:0;z-index:30;display:grid;place-items:center;background:color-mix(in srgb,var(--paper) 78%,transparent)}
+.busy[hidden]{display:none}
+.busy p{background:var(--ink);color:var(--surface);padding:12px 18px;border-radius:4px;font-weight:600;margin:0}
+#dsm canvas{display:block}
+.pair-focus{margin:16px 0 0;border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:4px;padding:12px 14px;background:var(--paper)}
+.pair-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.pair-head h3{margin:0;font-size:15px}
+.pair-grid{display:grid;grid-template-columns:minmax(120px,1fr) minmax(110px,.75fr) minmax(120px,1fr);gap:5px 12px;align-items:center}
+.pair-name{border:0;background:none;padding:0;text-align:left;font:inherit;font-weight:700;color:var(--ink);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pair-name:last-of-type{text-align:right}
+.pair-name:hover{text-decoration:underline;text-underline-offset:3px}
+.pair-flow{text-align:center;font-size:12px;color:var(--ink-2)}
+.pair-flow strong,.pair-flow span{display:block}.pair-flow strong{font-size:14px;color:var(--ink)}
+.pair-density{text-align:center}.pair-density strong,.pair-density span{display:block}.pair-density strong{font-size:19px;line-height:1}.pair-density span,.pair-meta{font-size:12px;color:var(--ink-2)}
+.pair-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pair-meta:nth-child(6){text-align:right}
+#collocBody tr{cursor:pointer}
+#collocBody tr:hover{background:var(--paper)}
+#collocBody tr.is-sel{background:var(--accent-soft)}
+#collocBody small{display:block;color:var(--ink-3);font-size:11.5px}
+.colloc-arrow{padding:0 5px;color:var(--accent)}
+.colloc-table{min-width:900px}
+.colloc-table td:first-child{white-space:nowrap}
+.colloc-table td:last-child{min-width:160px}
+.explorer-controls{display:flex;flex-wrap:wrap;align-items:end;gap:10px 16px;margin:14px 0}
+.explorer-workbench{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:18px;align-items:start;margin-top:14px}
+.explorer-panel{min-width:0}
+.layout.is-wide{grid-template-columns:minmax(0,1fr)}.layout.is-wide>.inspector{display:none}
+.explorer-stage{border:1px solid var(--rule);border-radius:4px;background:var(--paper);min-width:0}
+.explorer-stage-bar{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--rule)}
+.explorer-crumbs{display:flex;flex-wrap:wrap;align-items:center;flex:1 1 220px;min-width:0;font-size:13px}
+.explorer-crumbs>button:not(.ex-btn),.explorer-crumbs span button{font:inherit;color:var(--ink);background:none;border:0;padding:4px 6px;border-radius:4px;cursor:pointer;text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:3px}
+.explorer-crumbs [aria-current]{padding:4px 6px;font-weight:650;overflow-wrap:anywhere;text-decoration:none}
+.explorer-crumbs .sep{color:var(--ink-3);padding:0 1px}
+.explorer-crumbs .ex-btn{margin-right:6px}
+.ex-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rule);border-radius:4px;background:var(--surface);color:var(--ink);padding:6px 10px;font:inherit;font-size:13px;line-height:1.2;cursor:pointer}
+.ex-btn:hover,.explorer-zoom button:hover{border-color:var(--ink-3)}
+.ex-btn[hidden]{display:none}.ex-icon{padding:6px 8px}
+.explorer-find{position:relative;flex:0 1 240px;min-width:150px;margin:0}
+.explorer-find input{width:100%;font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:6px 8px}
+.explorer-find .explorer-results{position:absolute;top:calc(100% + 4px);left:0;width:max(100%,280px);max-width:calc(100vw - 32px);z-index:7;background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.14);max-height:min(360px,60vh);overflow:auto;padding:4px}
+.explorer-find .explorer-results:empty{display:none}
+.explorer-find .explorer-results button{width:100%;border:0;border-radius:3px}
+.explorer-find .explorer-results button:hover,.explorer-find .explorer-results button:focus{background:var(--paper)}
+.explorer-find .explorer-results .none{margin:6px 8px;font-size:13px;color:var(--ink-2)}
+/* Anchor the popover to the header row so it stays on screen at any width. */
+.ex-pop{position:static}.ex-pop>summary,.ex-chip>summary{list-style:none}.ex-pop>summary::-webkit-details-marker,.ex-chip>summary::-webkit-details-marker{display:none}
+.ex-pop[open]>summary{border-color:var(--accent)}
+.ex-pop-body{position:absolute;right:8px;top:calc(100% + 4px);z-index:7;width:min(280px,calc(100vw - 48px));margin:0;background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:12px;display:grid;gap:10px}
+.ex-pop-body select{width:100%}.ex-pop-body .explorer-actions{margin:0}.ex-pop-body [hidden]{display:none}
+.explorer-canvas{position:relative}
+.explorer-stage .explorer-chart{border:0;border-radius:0}
+.explorer-zoom{position:absolute;right:10px;bottom:10px;display:flex;flex-direction:column;border:1px solid var(--rule);border-radius:4px;background:var(--surface);overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.explorer-zoom button{border:0;border-bottom:1px solid var(--rule);background:none;color:var(--ink);width:36px;height:34px;font:inherit;font-size:17px;cursor:pointer}
+.explorer-zoom button:last-child{border-bottom:0;font-size:12px}
+.explorer-zoom[hidden]{display:none}
+.explorer-stage-foot{position:relative;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:6px 8px;border-top:1px solid var(--rule);font-size:12px;color:var(--ink-2)}
+.ex-chip>summary{cursor:pointer;border:1px solid var(--rule);border-radius:14px;padding:3px 10px;background:var(--surface);color:var(--ink-2)}
+.ex-chip[open]>summary{border-color:var(--accent);color:var(--ink)}.ex-chip[hidden]{display:none}
+.ex-chip-body{position:absolute;left:8px;right:8px;bottom:calc(100% + 6px);max-width:460px;z-index:7;background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:10px 12px}
+.ex-chip-body .explorer-legend{flex-direction:column;gap:4px;margin:0}.ex-chip-body .explorer-coverage{margin:0}
+.explorer-workbench.is-max{position:fixed;inset:0;z-index:60;margin:0;padding:12px;align-content:start;background:var(--paper);overflow:auto;grid-template-columns:minmax(0,1fr) 260px}
+.explorer-workbench.is-max .explorer-tools{top:0;max-height:calc(100vh - 24px)}
+.explorer-workbench.is-max .take{margin-top:0}
+.explorer-tools{position:sticky;top:64px;border:1px solid var(--rule);border-radius:4px;background:var(--paper);max-height:calc(100vh - 88px);overflow:auto;min-width:0}
+.explorer-tools>summary{padding:10px 12px;font-weight:650;cursor:pointer}
+.explorer-tools[open]>summary{border-bottom:1px solid var(--rule)}
+.explorer-tools-body{padding:0 12px 12px}
+.explorer-tools .explorer-controls{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:12px 0}
+.explorer-tools select{width:100%;min-width:0}
+.explorer-tools .explorer-search input{min-width:0;flex-basis:100%;width:100%}
+.explorer-tools details>summary,.explorer-help>summary{cursor:pointer;font-size:13px;font-weight:600}
+.explorer-help{margin-top:12px}
+@media(max-width:760px){.explorer-workbench{grid-template-columns:minmax(0,1fr);gap:10px}.explorer-tools{order:-1;position:static;max-height:none}.explorer-workbench.is-max{grid-template-columns:minmax(0,1fr)}.explorer-workbench.is-max .take{display:none}
+  .explorer-stage-bar .seg{order:1}.explorer-stage-bar .ex-pop{order:2;margin-left:auto}#exMax{order:3}.explorer-crumbs{order:4;flex-basis:100%}.explorer-find{order:5;flex:1 1 100%}
+  .ex-pop>summary span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.explorer-tools .explorer-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.explorer-controls label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-2);min-width:0}
+.explorer-controls select,.explorer-controls input,.explorer-search input{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:4px;padding:6px 8px;max-width:100%}
+.explorer-controls input[type=number]{width:90px}
+.explorer-search{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0}
+.explorer-search input{flex:1;min-width:140px}
+.explorer-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.explorer-actions button,.explorer-search button,.explorer-results button{border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink);padding:6px 10px;font:inherit;font-size:13px;cursor:pointer}
+.explorer-results{display:flex;flex-direction:column;gap:4px}.explorer-results button{text-align:left;overflow-wrap:anywhere}
+.explorer-results small{display:block;color:var(--ink-2)}
+.explorer-coverage{font-size:13px;color:var(--ink-2);margin:8px 0}
+.explorer-chart{border:1px solid var(--rule);border-radius:4px;background:var(--paper);overflow:auto;max-width:100%}
+.explorer-chart svg{display:block}.explorer-chart .rel-node,.explorer-chart .rel-edge,.explorer-chart .rel-cell,.explorer-chart .rel-label{cursor:pointer}
+.rel-node:focus,.rel-edge:focus,.rel-cell:focus,.rel-label:focus{outline:none;filter:drop-shadow(0 0 3px var(--accent))}
+.rel-node text{font-size:11px;fill:var(--ink);paint-order:stroke;stroke:var(--paper);stroke-width:3px;stroke-linejoin:round;pointer-events:none}
+.rel-node .rel-caption{font-size:10px;fill:var(--ink-2)}
+.rel-edge{fill:none;stroke:var(--ink-3);stroke-opacity:.55}.rel-edge.is-sel{stroke:var(--accent);stroke-opacity:1}
+.ex-shapes{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;margin-right:auto}.ex-shapes[hidden]{display:none}
+.ex-shapes span{display:inline-flex;align-items:center;gap:5px}.ex-glyph{flex:none}
+.ex-swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.rel-edge:hover{stroke-opacity:1}.rel-edge-extra{fill:none;stroke:var(--ink-3);stroke-width:1.2px;stroke-opacity:.75;cursor:pointer}.rel-edge-hit{fill:none;stroke:transparent;stroke-width:12px;cursor:pointer}
+.rel-node.is-sel .rel-shape{stroke:var(--accent);stroke-width:3px}
+.rel-position-lock{fill:var(--ink);stroke:var(--paper);stroke-width:1.5px;display:none;pointer-events:none}.rel-node.is-fixed .rel-position-lock{display:block}
+.explorer-chart .rel-node{cursor:grab}.explorer-chart .rel-node:active{cursor:grabbing}
+.rel-label{font-size:11px;fill:var(--ink)}
+.explorer-detail{border-left:3px solid var(--accent);background:var(--paper);padding:12px 14px;margin-top:16px;overflow-wrap:anywhere}
+.explorer-detail h3{margin:0 0 8px;font-size:16px}.explorer-detail p{margin:6px 0;font-size:13px}
+.explorer-detail[hidden]{display:none}.explorer-detail .xref-table{min-width:620px}
+.explorer-legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12px;color:var(--ink-2);margin:8px 0}
+.explorer-path{font-size:13px;overflow-wrap:anywhere}.explorer-path button{font:inherit;color:var(--ink);border:0;border-bottom:1px solid var(--rule);background:none;cursor:pointer;padding:3px}
+.explorer-depth{padding:16px}.explorer-depth p{font-size:13px;color:var(--ink-2)}
+.depth-level{border-top:1px solid var(--rule);padding:12px 0}.depth-level h3{margin:0 0 8px;font-size:15px}
+.depth-items{display:flex;flex-wrap:wrap;gap:6px}.depth-items button{font:inherit;font-size:12px;padding:5px 8px;background:var(--surface);color:var(--ink);border:1px solid var(--rule);border-radius:4px;overflow-wrap:anywhere;max-width:100%;cursor:pointer}
+.depth-items button.is-sel{border-color:var(--accent)}.depth-cycle{border-left:3px solid var(--accent);padding:8px;margin:6px 0;background:var(--surface)}.depth-cycle p{margin:0 0 6px}
+@media(max-width:620px){.explorer-controls{gap:8px}.explorer-controls label{flex:1 1 120px}}
+@media (max-width:620px){.pair-grid{grid-template-columns:minmax(0,1fr) 98px minmax(0,1fr);gap:5px 7px}.pair-meta{font-size:11px}}
+.rrow{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 70px;gap:12px;align-items:center;width:100%;border:0;border-bottom:1px solid var(--rule);background:none;padding:6px 4px;text-align:left;cursor:pointer}
+.rrow:hover{background:var(--paper)}
+.rrow.is-sel{box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.r-name{display:flex;flex-direction:column;min-width:0}
+.r-sym{font-size:13.5px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.r-mod{font-size:12px;color:var(--ink-3);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.r-track{display:flex;height:12px}
+.r-own{display:block;height:100%}
+.r-dom{display:block;height:100%;opacity:.42}
+.r-val{text-align:right;font-size:13.5px;font-weight:600}
+.key{display:flex;gap:16px;font-size:12.5px;color:var(--ink-3);margin:0 0 6px}
+.key i{display:inline-block;width:18px;height:9px;margin-right:6px;background:var(--ink-2);vertical-align:0}
+.key i.dom{opacity:.42}
+.key i.hatch{background-color:var(--ink-2);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.55) 0 2px,transparent 2px 5px)}
+.key i.faint{opacity:.25}
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+.tbl th{text-align:left;font-weight:600;font-size:12.5px;color:var(--ink-3);border-bottom:1px solid var(--ink);padding:6px 8px 6px 0}
+.tbl td{border-bottom:1px solid var(--rule);padding:7px 8px 7px 0;vertical-align:top}
+.tbl .num{text-align:right;white-space:nowrap}
+.tbl code{font-family:inherit;font-weight:600;font-size:13px}
+h3.sub{font-size:16px;font-weight:700;margin:0 0 4px}
+.subq{margin:0 0 10px;color:var(--ink-2);font-size:13.5px}
+
+/* DSM */
+#dsm svg{display:block}
+.dsm-cell{fill:var(--ink);cursor:pointer}
+.dsm-diag{cursor:pointer}
+.dsm-cell:hover,.dsm-diag:hover{stroke:var(--accent);stroke-width:1.5}
+.dsm-band{fill:var(--accent-soft)}
+.dsm-frame{fill:none;stroke:var(--ink-2);stroke-width:1.2}
+.dsm-frame.cl{stroke:var(--accent);stroke-width:1.6}
+.dsm-label{fill:var(--ink-2);cursor:pointer}
+.dsm-label.is-sel{fill:var(--accent);font-weight:700}
+.dsm-note{font-size:13px;color:var(--ink-3);margin:8px 0 0}
+
+/* sankey */
+#sankey svg{display:block}
+.sk-flow{cursor:pointer}
+.sk-node{cursor:pointer}
+.sk-right{fill:var(--ink)}
+.sk-label{font-size:11.5px;fill:var(--ink-2);cursor:default}
+.sk-label.is-sel{fill:var(--accent);font-weight:700}
+.sk-cols{display:flex;justify-content:space-between;font-size:13px;color:var(--ink-3);margin:0 0 4px}
+#misBody tr{cursor:pointer}
+#misBody tr:hover{background:var(--paper)}
+#misBody tr.is-sel{background:var(--accent-soft)}
+.m-file{display:block;font-weight:600}
+.m-funcs{display:block;font-size:12px;color:var(--ink-3)}
+
+/* data format */
+details.fmt{margin-top:8px;font-size:14px;color:var(--ink-2)}
+details.fmt summary{cursor:pointer;font-weight:600;color:var(--ink)}
+details.fmt pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:12px 14px;overflow-x:auto;font-size:12.5px;line-height:1.45;color:var(--ink)}
+details.fmt p{max-width:78ch}
+
+
+/* shared versus isolated */
+.tau{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:14px;color:var(--ink-2);margin:4px 0 2px}
+.tau output{font-weight:700;color:var(--ink)}
+.tau input{flex:1;min-width:180px;max-width:320px;accent-color:var(--accent)}
+#roleMap svg,#layers svg{display:block}
+.rq-shared{fill:var(--ink);fill-opacity:.045}
+.rq-line{stroke:var(--ink-3);stroke-dasharray:4 4}
+.rq-corner{font-size:12px;fill:var(--ink-3);font-weight:600}
+.axis text{fill:var(--ink-3);font-size:11px;font-family:var(--sans)}
+.axis path,.axis line{stroke:var(--rule)}
+.axis-title{font-size:12px;fill:var(--ink-2)}
+.rb{fill-opacity:.72;stroke:var(--surface);stroke-width:1;cursor:pointer}
+.rb:hover{fill-opacity:1}
+.rb.is-sel{stroke:var(--accent);stroke-width:3;fill-opacity:1}
+.rb-own{fill:none;stroke:var(--ink);stroke-width:1.4;stroke-dasharray:3 2;pointer-events:none}
+.rb-label{font-size:11.5px;fill:var(--ink);font-weight:600;pointer-events:none;paint-order:stroke;stroke:var(--surface);stroke-width:3px}
+.rb-label.is-sel{fill:var(--accent)}
+.blobs{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.blob{display:flex;flex-direction:column;gap:5px;text-align:left;border:1px solid var(--rule);border-radius:4px;background:var(--surface);padding:12px 14px;cursor:pointer;font-size:13px;color:var(--ink-2)}
+.blob:hover{border-color:var(--ink-2)}
+.blob-head{display:flex;align-items:center;gap:8px;color:var(--ink)}
+.blob-head i{flex:none;width:10px;height:10px;border-radius:2px}
+.blob-name{font-weight:700;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.blob-size{font-weight:700;font-size:15px}
+.blob-split{color:var(--ink-3);font-size:12.5px;margin-bottom:2px}
+.blob-row{display:block;line-height:1.4}
+.blob-row b{display:block;font-size:12px;font-weight:600;color:var(--ink-3)}
+.blob code,.ins-role code{font-family:inherit;font-weight:600;color:var(--ink)}
+.muted{color:var(--ink-3)}
+.ly-band{font-size:12px;fill:var(--ink-3)}
+.ly-block{stroke:var(--surface);stroke-width:.5;cursor:pointer}
+.ly-block:hover{filter:brightness(1.12)}
+.ly-block.is-sel{stroke:var(--accent);stroke-width:2.5}
+.ly-label{font-size:10.5px;fill:#fff;pointer-events:none;font-stretch:85%;font-weight:600}
+.ly-link{fill:none;stroke-width:1.2;pointer-events:none}
+.ly-link.dep{stroke:var(--accent);stroke-opacity:.55}
+.ly-link.use{stroke:var(--ink-2);stroke-opacity:.4}
+.ly-cyc{fill:none;stroke:var(--accent);stroke-width:1.2;stroke-dasharray:3 2;pointer-events:none}
+.ins-role{font-size:13.5px;color:var(--ink-2);margin:-6px 0 12px}
+.role-tag{display:inline-block;font-size:12px;font-weight:700;padding:1px 7px;border-radius:999px;margin-right:4px;color:#fff;background:var(--ink-2)}
+.role-tag.thin{background:#41658F}.role-tag.heavy{background:#8A3412}.role-tag.iso{background:#2A7D5B}.role-tag.wide{background:#7D6A2E}
+
+
+/* compression */
+.mem-ov{display:block;height:100%;flex:none;background:#59636D;border-right:1px solid var(--surface)}
+.mem-saved{display:flex;align-items:flex-end;height:100%;flex:none;background:repeating-linear-gradient(135deg,rgba(42,140,126,.28) 0 4px,rgba(42,140,126,.12) 4px 8px);border-right:1px dashed var(--ink-3);font-size:12px;font-weight:600;color:var(--ink-2);padding:0 6px 5px;white-space:nowrap;overflow:hidden;font-stretch:85%}
+.comp-set{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(220px,1.4fr) repeat(2,minmax(150px,1fr)) minmax(140px,.8fr);gap:10px 18px;align-items:end;margin:6px 0 4px;font-size:13px;color:var(--ink-2)}
+@media (max-width:860px){.comp-set{grid-template-columns:1fr 1fr}}
+.comp-set label{display:flex;flex-direction:column;gap:4px}
+.comp-set output{font-weight:700;color:var(--ink)}
+.comp-set input[type=text],.comp-set input[type=number]{font:inherit;font-size:14px;padding:5px 8px;border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink)}
+.comp-set input[type=number]{width:90px}
+.comp-set input[type=range]{accent-color:var(--accent)}
+.cs-ov span{display:flex;align-items:center;gap:6px}
+#compMods,.cands{list-style:none;margin:0;padding:0}
+.crow{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 72px;gap:12px;align-items:center;width:100%;border:0;border-bottom:1px solid var(--rule);background:none;padding:6px 4px;text-align:left;cursor:pointer}
+.crow:hover{background:var(--paper)}.crow.is-sel{box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.c-track{display:flex;height:12px}
+.c-solid{display:block;height:100%;background:var(--c)}
+.c-untap{display:block;height:100%;background-color:#D99A2B;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.5) 0 2px,transparent 2px 5px)}
+.c-saved{display:block;height:100%;background:var(--c);opacity:.22}
+.key i.cs{background:var(--ink-2)}.key i.cu{background-color:#D99A2B;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.5) 0 2px,transparent 2px 5px)}.key i.cv{background:var(--ink-2);opacity:.22}
+.cand-h{font-size:13px;font-weight:700;margin:12px 0 4px;color:var(--ink)}
+.cand{display:grid;grid-template-columns:auto minmax(0,1fr) 72px;gap:10px;align-items:center;border-bottom:1px solid var(--rule);padding:6px 4px;cursor:pointer}
+.cand:hover{background:var(--paper)}
+.cand input{width:16px;height:16px;accent-color:var(--accent)}
+.cand.covered{opacity:.6;cursor:default}
+.cand.poor .r-sym{color:var(--ink-2)}
+.cand.poor .r-mod{color:#8A3412}
+.ins-note{font-size:13.5px;color:var(--ink-2);margin:-6px 0 12px}
+details.rules{margin-top:12px}
+details.rules summary{cursor:pointer;font-weight:600}
+details.rules textarea{display:block;width:100%;max-width:100%;margin-top:8px;font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:10px 12px;border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink);resize:vertical}
+.rules-actions{display:flex;align-items:center;gap:12px;margin-top:6px}
+
+.tip{position:fixed;z-index:20;pointer-events:none;background:var(--ink);color:var(--surface);font-size:13px;line-height:1.4;padding:7px 10px;border-radius:4px;max-width:340px;word-break:break-word}
+.tip[hidden]{display:none}
+.tip{max-height:calc(100vh - 16px);overflow:hidden}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.xref-scroll{overflow-x:auto}.xref-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:13px}.xref-table th,.xref-table td{text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.xref-table .linkbtn{white-space:normal;text-align:left;overflow-wrap:anywhere}#symbolPanel{margin-top:18px}#symbolPanel summary{cursor:pointer;font-weight:600}#sourceCoverage{margin:8px 0}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="mast">
+    <div>
+      <h1>Image Proctologist</h1>
+      <p class="lede">Where the bytes go, what compression saves, what the linker throws away, what keeps the rest in the image, and which code belongs together. Built from what the linker sees: every input section, its size and output section, whether it survives garbage collection, and every reference between sections.</p>
+      <p class="dataset">Showing <strong id="datasetName"></strong></p>
+    </div>
+    <div class="loadbox">
+      <div class="loadrow">
+        <label class="btn primary">Load linker export<input type="file" id="fileIn" accept=".json,.gz,application/json,application/gzip"></label>
+        <button class="btn" id="restore" hidden>Back to sample</button>
+      </div>
+      <div class="ctrls"><span class="ctrl-label">Measure</span><div class="seg" role="group" aria-label="Measure"><button data-set="measure:stored">Stored in RAM</button><button data-set="measure:live">Raw</button><button data-set="measure:dead">Eliminated</button><button data-set="measure:pre">Linker input</button></div></div>
+      <div class="ctrls" id="sampleCtl"><span class="ctrl-label">Sample size</span><div class="seg" role="group" aria-label="Sample size"><button data-set="sample:60000">60k</button><button data-set="sample:150000">150k</button><button data-set="sample:300000">300k sections</button></div></div>
+      <p id="loadMsg" role="status"></p>
+    </div>
+  </header>
+
+  <section class="memmap-wrap" aria-label="Memory map">
+    <div id="memmap"></div>
+    <p id="heroFacts"></p>
+  </section>
+
+  <nav class="workspace-nav" id="workspaceNav" aria-label="Analysis workspace">
+    <button class="workspace-tab" data-workspace="footprint" aria-selected="true">Footprint</button>
+    <button class="workspace-tab" data-workspace="connectivity" aria-selected="false">Connectivity</button>
+  </nav>
+
+  <div class="layout">
+    <main id="mainCol">
+      <section class="workspace-panel" id="workspace-footprint" data-workspace-panel="footprint">
+        <nav class="workspace-subnav" aria-label="Footprint views">
+          <button class="workspace-subtab" data-view-workspace="footprint" data-view="treemap" aria-selected="true">Where the bytes are</button>
+          <button class="workspace-subtab" data-view-workspace="footprint" data-view="addrmap" aria-selected="false">Where things sit</button>
+          <button class="workspace-subtab" data-view-workspace="footprint" data-view="comp" aria-selected="false">What compression saves</button>
+          <button class="workspace-subtab" data-view-workspace="footprint" data-view="dead" aria-selected="false">What the linker throws away</button>
+          <button class="workspace-subtab" data-view-workspace="footprint" data-view="retained" aria-selected="false">What you could cut</button>
+        </nav>
+
+        <section class="view" id="v-treemap" data-view-panel="footprint:treemap">
+        <div class="view-head">
+          <div><h2>Where the bytes are</h2><p class="q">Area is <span class="meas-name"></span>. Each view shows three levels at a time. Object files with fewer than two visible sections are collapsed into their nearest useful parent; the source tree keeps a kind layer only when it spans at least two visible sections from at least two object files. When one symbol takes at least 95% of a file, the file is flattened at the subsystem view into that symbol plus an interactive “Other symbols” tile. Focusing the file gives the same split. Click a block to zoom in and select its subsystem.</p></div>
+        </div>
+        <p class="take" id="tmTake"></p>
+        <div class="tm-stage">
+          <div class="tm-stage-bar">
+            <nav id="crumbs" aria-label="Treemap level"></nav>
+            <form class="tm-search" id="tmSearchForm" role="search">
+              <label for="tmSearch">Find in the treemap</label>
+              <input type="search" id="tmSearch" placeholder="Find a directory, object file, output section or symbol" spellcheck="false" autocomplete="off">
+              <button type="submit">Find</button>
+            </form>
+            <details class="ex-pop tm-tree" id="tmTree"><summary class="ex-btn" title="How the tree is built"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 2.5h5v4H2zM9 9.5h5v4H9zM4.5 6.5v5H9" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span>Tree</span><i class="tm-tree-dot" aria-hidden="true" hidden></i><span class="sr-only" id="tmTreeChanged"></span></summary>
+              <div class="ex-pop-body">
+                <fieldset><legend>Ownership paths</legend>
+                  <label class="tm-opt"><input type="radio" name="pathMode" value="object"><span><strong>Build paths</strong><small>Object files where the build placed them.</small></span></label>
+                  <label class="tm-opt"><input type="radio" name="pathMode" value="source"><span><strong>Source files</strong><small>Source paths from debug information. Sections without a single source keep their build path.</small></span></label>
+                  <p class="q">Changing this analyzes the export again.</p>
+                  <p class="q" id="sourceCoverage"></p>
+                </fieldset>
+                <fieldset><legend>Grouping</legend>
+                  <label class="tm-opt"><input type="radio" name="treeMode" value="source"><span><strong>Source tree</strong><small>Directories, then subsystems, files and sections.</small></span></label>
+                  <label class="tm-opt"><input type="radio" name="treeMode" value="kind"><span><strong>Code and data first</strong><small>Section type at the top: code, read-only data, data and zero-initialized data, then directories.</small></span></label>
+                </fieldset>
+                <fieldset><legend>Initializer data</legend>
+                  <label class="tm-opt"><input type="radio" name="fragmentView" value="logical"><span><strong>Count with the symbol that uses it</strong><small>Anonymous initializer data used by only one symbol appears under that symbol.</small></span></label>
+                  <label class="tm-opt"><input type="radio" name="fragmentView" value="physical"><span><strong>Keep as separate sections</strong><small>Show anonymous initializer data where the linker placed it.</small></span></label>
+                  <p class="q" id="fragmentModeNote"></p>
+                </fieldset>
+              </div></details>
+            <p class="tm-search-msg" id="tmSearchMsg" role="status" aria-live="polite"></p>
+          </div>
+          <div id="treemap"></div>
+          <div class="tm-stage-foot">
+            <label>Size<select id="tmMeasure"><option value="stored">Stored in RAM</option><option value="live">Raw</option><option value="dead">Eliminated</option><option value="pre">Linker input</option></select></label>
+            <label>Color<select id="tmColor"><option value="dom">Directory</option><option value="kind">Section type</option><option value="comp">Compression</option><option value="dead">Eliminated share</option></select></label>
+            <div class="legend" id="tmLegend"></div>
+          </div>
+        </div>
+        <details id="symbolPanel" open hidden><summary>Selected section: symbols and references</summary><div id="symbolDetailBody"></div></details>
+      </section>
+
+      <section class="view" id="v-addrmap" data-view-panel="footprint:addrmap" hidden>
+        <div class="view-head"><div><h2>Where things sit in memory</h2><p class="q">Each row is a stretch of addresses, read left to right and top to bottom like text, and color shows what occupies each point. Addresses are as linked, before compression. The selected subsystem is shown in magenta.</p></div></div>
+        <p class="take" id="addrTake"></p>
+        <div class="addr-stage">
+          <div class="addr-map" id="addrMap"></div>
+          <div class="addr-foot"><span class="ctrl-label">Color by</span><div class="seg" role="group" aria-label="Address map color"><button data-set="addrColor:dom">Directory</button><button data-set="addrColor:out">Output section</button><button data-set="addrColor:comp">Compression</button></div><div class="legend" id="addrLegend"></div></div>
+        </div>
+        <div class="scroll-x"><table class="addr-table" id="addrTable"></table></div>
+      </section>
+
+      <section class="view" id="v-comp" data-view-panel="footprint:comp" hidden>
+        <div class="view-head"><div><h2>What compression saves</h2><p class="q">Sections placed in output sections that match the patterns below are stored compressed. Stored size uses one scale factor for code and one for data; zero-initialized data occupies RAM but has nothing to compress. Output sections matching the removal patterns are omitted from the dashboard analysis and its reference graph.</p></div>
+          <div class="ctrls"><button class="linkbtn" id="showComp">Show compression in the treemap</button></div></div>
+        <div class="comp-set">
+          <label class="cs-pat">Compressed output sections<input type="text" id="cPat" spellcheck="false" autocomplete="off"></label>
+          <label class="cs-pat">Remove output sections<input type="text" id="xPat" placeholder="comma-delimited globs" spellcheck="false" autocomplete="off"></label>
+          <label>Code stored at <output id="cCodeVal"></output><input type="range" id="cCode" min="20" max="95" step="1"></label>
+          <label>Data stored at <output id="cDataVal"></output><input type="range" id="cData" min="10" max="95" step="1"></label>
+          <label class="cs-ov">Decompression buffer<span><input type="number" id="cOv" min="0" step="0.25"> MiB</span></label>
+        </div>
+        <p class="take" id="compTake"></p>
+        <div class="dead-grid">
+          <div>
+            <div class="view-head" style="margin-bottom:8px"><h3 class="sub">By subsystem</h3><div class="seg" role="group" aria-label="Sort by"><button data-set="compSort:untap">Untapped</button><button data-set="compSort:saved">Saved</button><button data-set="compSort:stored">Stored</button></div></div>
+            <p class="key"><span><i class="cs"></i>Stored</span><span><i class="cu"></i>Could still be saved</span><span><i class="cv"></i>Already saved</span></p>
+            <ol id="compMods"></ol>
+          </div>
+          <div>
+            <h3 class="sub">Candidates</h3>
+            <p class="subq">Compressed code costs decompression time when it runs, so the best candidates are rarely used features and large data. Tick items to project the saving.</p>
+            <h4 class="cand-h">Rarely used code and data</h4><ol class="cands" id="candRare"></ol>
+            <h4 class="cand-h">Large data stored uncompressed</h4><ol class="cands" id="candData"></ol>
+            <h4 class="cand-h">Poor candidates: shared or hot code</h4><ol class="cands" id="candPoor"></ol>
+            <p class="subq" id="candHotNote" style="margin-top:8px"></p>
+          </div>
+        </div>
+        <div id="whatIf"></div>
+        <details class="rules" id="rulesBox" hidden><summary>Linker-script changes for the selection</summary>
+          <textarea id="rules" readonly rows="14" spellcheck="false"></textarea>
+          <div class="rules-actions"><button class="btn" id="copyRules">Copy</button><span id="copyMsg" class="subq"></span></div>
+        </details>
+      </section>
+
+      <section class="view" id="v-dead" data-view-panel="footprint:dead" hidden>
+        <div class="view-head"><div><h2>What the linker throws away</h2><p class="q">Sections in the object files that garbage collection removes because nothing reachable from a root refers to them. They cost compile and link time and maintenance, not memory.</p></div>
+          <div class="ctrls"><button class="linkbtn" id="showDead">Show eliminated code in the treemap</button></div></div>
+        <p class="take" id="deadTake"></p>
+        <div class="dead-grid">
+          <div>
+            <div class="view-head" style="margin-bottom:8px"><h3 class="sub">Subsystems by eliminated input</h3><div class="seg" role="group" aria-label="Sort by"><button data-set="deadSort:bytes">Size</button><button data-set="deadSort:share">Share</button></div></div>
+            <p class="key"><span><i class="hatch"></i>Eliminated</span><span><i class="faint"></i>Kept</span></p>
+            <ol id="deadMods"></ol>
+          </div>
+          <div>
+            <h3 class="sub">Largest unused islands</h3>
+            <p class="subq">Groups of eliminated sections that only refer to each other: usually a feature that is compiled in but never called.</p>
+            <ol id="deadIsl"></ol>
+            <h3 class="sub" style="margin-top:20px">Object files dropped entirely</h3>
+            <p class="subq" id="deadFilesTake"></p>
+            <ol class="syms" id="deadFiles"></ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="v-retained" data-view-panel="footprint:retained" hidden>
+        <div class="view-head"><div><h2>What you could cut</h2><p class="q">Each bar is everything in the image that is only reachable through one section: what the image would lose if that section, or the one reference to it, went away.</p></div></div>
+        <p class="take" id="retTake"></p>
+        <div class="ret-grid">
+          <div>
+            <p class="key"><span><i></i>The section itself</span><span><i class="dom"></i>Only reachable through it</span></p>
+            <ol id="retList"></ol>
+          </div>
+          <div>
+            <h3 class="sub">Template families</h3>
+            <p class="subq">Each instantiation is separate code. Kept and dropped count the instantiated types. Families with many instantiations are candidates for a shared, type-erased core.</p>
+            <div class="scroll-x"><table class="tbl"><thead><tr><th>Template</th><th class="num">Kept</th><th class="num">Dropped</th><th class="num">Size</th></tr></thead><tbody id="famBody"></tbody></table></div>
+          </div>
+        </div>
+      </section>
+
+      </section>
+
+      <section class="workspace-panel" id="workspace-connectivity" data-workspace-panel="connectivity" hidden>
+        <nav class="workspace-subnav" aria-label="Connectivity views">
+          <button class="workspace-subtab" data-view-workspace="connectivity" data-view="roles" aria-selected="true">Shared versus isolated</button>
+          <button class="workspace-subtab" data-view-workspace="connectivity" data-view="dsm" aria-selected="false">Subsystem dependencies</button>
+          <button class="workspace-subtab" data-view-workspace="connectivity" data-view="groups" aria-selected="false">Natural groups</button>
+          <button class="workspace-subtab" data-view-workspace="connectivity" data-view="explorer" aria-selected="false">Relationship explorer</button>
+        </nav>
+
+      <section class="view" id="v-roles" data-view-panel="connectivity:roles">
+        <div class="view-head">
+          <div><h2>Shared versus isolated</h2><p class="q">Each bubble is a subsystem or top-level directory, sized by its bytes in the image. Across: how many of the other top-level directories use it. Up: how narrow its interface is, measured as the share of its bytes that anything outside refers to directly. A ring means most of it is reachable through a single entry point.</p></div>
+          <div class="ctrls"><div class="seg" role="group" aria-label="Level"><button data-set="roleLevel:mod">Subsystems</button><button data-set="roleLevel:dom">Directories</button></div></div>
+        </div>
+        <div class="tau"><label for="tau">Count as shared when used from at least <output id="tauVal">35%</output> of the other top-level directories</label><input type="range" id="tau" min="10" max="80" step="5" value="35"></div>
+        <p class="take" id="roleTake"></p>
+        <div class="scroll-x" id="roleMap"></div>
+        <h3 class="sub" style="margin-top:22px">Isolated blobs</h3>
+        <p class="subq" id="blobTake"></p>
+        <div class="blobs" id="blobCards"></div>
+        <h3 class="sub" style="margin-top:26px">Dependency layers above the shared floor</h3>
+        <p class="subq">Shared subsystems form the floor. Everything else is stacked by its longest chain of dependencies on other non-shared subsystems; subsystems in a dependency cycle land on one layer. References from startup and init code are left out, since they point from the bottom of the stack to the top. Width grows with size. Select a subsystem to see what it uses (below it, magenta) and what uses it (grey).</p>
+        <p class="take" id="layerTake"></p>
+        <div class="scroll-x" id="layers"></div>
+      </section>
+
+      <section class="view" id="v-dsm" data-view-panel="connectivity:dsm" hidden>
+        <div class="view-head">
+          <div><h2>How subsystems depend on each other</h2><p class="q">Each row uses the columns. Switch from absolute reference volume to normalized measures when looking for subsystems that may be organized more closely than their source-tree placement suggests. Weight inside the outlined blocks is healthy; weight outside them is coupling.</p></div>
+          <div class="ctrls"><div class="seg" role="group" aria-label="Level"><button data-set="dsmLevel:dom">Directories</button><button data-set="dsmLevel:mod">Subsystems</button></div><div class="seg" role="group" aria-label="Cell measure"><button data-set="dsmMetric:count">Reference count</button><button data-set="dsmMetric:share">Caller share</button><button data-set="dsmMetric:mutual">Two-way density</button></div><div class="seg" role="group" aria-label="Order by"><button data-set="dsmOrder:tree">Source tree</button><button data-set="dsmOrder:cluster">Actual connections</button></div><div class="seg" role="group" aria-label="Shared infrastructure"><button data-set="hideInfra:show">Show shared</button><button data-set="hideInfra:hide">Hide shared</button></div></div>
+        </div>
+        <p class="take" id="dsmTake"></p>
+        <div class="scroll-x" id="dsm"></div>
+        <p class="dsm-note" id="dsmMetricNote"></p>
+        <p class="dsm-note">Source tree order outlines each top-level directory. Actual-connection order outlines groups found by community detection on the full section graph. Hover for names when the matrix is too dense to label. Click a cell to inspect a pair; both directions are outlined.</p>
+        <div class="pair-focus" id="dsmPair" hidden></div>
+        <h3 class="sub" style="margin-top:22px">Collocation candidates</h3>
+        <p class="subq">Pairs are ranked by reciprocal coupling: the harmonic mean of each side’s share of external references, tempered by total references. Review shared infrastructure and intentional directional layering before moving or merging code.</p>
+        <p class="take" id="collocTake"></p>
+        <div class="scroll-x"><table class="tbl colloc-table"><thead><tr><th>Subsystem pair</th><th class="num">Score</th><th class="num">Left → right</th><th class="num">Right → left</th><th class="num">Two-way share</th><th class="num">Stored</th><th>Signal</th></tr></thead><tbody id="collocBody"></tbody></table></div>
+      </section>
+
+      <section class="view" id="v-explorer" data-view-panel="connectivity:explorer" hidden>
+        <div class="view-head"><div><h2>Explore relationships</h2><p class="q">Follow directed dependencies from directories into subsystems, functions and data. Graph and matrix share the same relationships; dependency depth groups these items by chains and cycles. Arrows and matrix rows point from users to dependencies.</p></div></div>
+        <div class="explorer-workbench">
+        <div class="explorer-panel">
+                    <p class="take" id="exTake"></p>
+          <div class="explorer-stage" id="exStage">
+            <div class="explorer-stage-bar">
+              <div class="seg" role="group" aria-label="Relationship display"><button data-ex-view="graph" aria-pressed="true">Graph</button><button data-ex-view="matrix" aria-pressed="false">Matrix</button><button data-ex-view="depth" aria-pressed="false">Depth</button></div>
+              <nav class="explorer-crumbs" aria-label="Exploration path"><button id="exBack" class="ex-btn" type="button" hidden>Back</button><button id="exOverview" type="button">Whole image</button><span id="exCrumbTrail"></span></nav>
+              <form class="explorer-find" id="exSearchForm" role="search"><label class="sr-only" for="exSearch">Find and focus an item</label><input id="exSearch" type="search" placeholder="Find and focus" autocomplete="off"><div class="explorer-results" id="exResults"></div></form>
+              <details class="ex-pop" id="exSettings"><summary class="ex-btn" title="Display settings"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5" cy="4" r="1.9" fill="currentColor"/><circle cx="11" cy="8" r="1.9" fill="currentColor"/><circle cx="7" cy="12" r="1.9" fill="currentColor"/></svg><span>Display</span></summary>
+                <div class="ex-pop-body explorer-controls">
+                  <label class="ex-graph-only">Arrange graph by<select id="exArrange"><option value="links">Connections</option><option value="rings">Number of users</option></select></label>
+                  <label class="ex-graph-only">Color by<select id="exColor"><option value="group">Connected group</option><option value="dir">Top-level directory</option></select></label>
+                  <label>Weight<select id="exMetric"><option value="count">Reference count</option><option value="share">Caller share</option><option value="mutual">Reciprocal strength</option></select></label>
+                  <div class="explorer-actions ex-graph-only"><button id="exMotion" type="button" aria-pressed="false">Pause motion</button><button id="exRelease" type="button">Release held nodes</button><button id="exRearrange" type="button">Rearrange</button></div>
+                </div></details>
+              <button id="exMax" class="ex-btn ex-icon" type="button" aria-pressed="false" title="Expand graph"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span class="sr-only">Expand graph</span></button>
+            </div>
+            <div class="explorer-canvas">
+              <div class="explorer-chart" id="exChart"></div>
+              <div class="explorer-zoom" id="exZoom" role="group" aria-label="Zoom"><button id="exZoomIn" type="button" title="Zoom in" aria-label="Zoom in">+</button><button id="exZoomOut" type="button" title="Zoom out" aria-label="Zoom out">−</button><button id="exFit" type="button" title="Fit graph to view">Fit</button></div>
+            </div>
+            <div class="explorer-stage-foot">
+              <div class="ex-shapes" id="exShapes" role="list" aria-label="Node types in this graph" hidden></div>
+              <details class="ex-chip" id="exLegendBox"><summary>Legend</summary><div class="ex-chip-body"><div class="explorer-legend" id="exLegend"><span>Arrows: user to dependency</span><span>Shapes: hexagon top-level directory, diamond subsystem, circle function, square data symbol; a hollow outline is a section without symbol information</span><span>Dashed edges: approximate attribution</span><span>Dashed node outlines: shared items</span><span>Thin arrows: relationships hidden by display limits, shown for the highlighted item</span><span>Click or press Enter to toggle node highlights and details</span><span>Zoom in to see more labels</span></div></div></details>
+              <details class="ex-chip"><summary id="exCoverageShort">Coverage</summary><div class="ex-chip-body"><p class="explorer-coverage" id="exCoverage" role="status" aria-live="polite"></p></div></details>
+            </div>
+          </div>
+          <div class="explorer-legend" id="exGroups" hidden></div>
+          <p class="q" id="exRadial" hidden></p>
+          <details class="explorer-help"><summary>How to use the explorer</summary>
+            <p class="q" id="exGraphHelp">Click a node to toggle its dependencies in magenta and dependents in teal. Double-click a component to expand its subsystems, or a subsystem to show its symbols; Shift+Enter also expands a focused node. Drag nodes to hold their positions; press Escape to release. Arrow keys move a focused node. Pan the background and scroll to zoom; Expand fills the window and Escape returns. A highlighted item also shows its relationships hidden by display limits as thin arrows. Arranged by connections, items that make up a larger share of each other’s references sit closer together, using every relationship among the displayed items, not only the drawn arrows; a focused item starts at the center. Colors show connected groups found among the displayed items; switch Color by to see top-level directories. Labels that would overlap are hidden until you zoom in or highlight an item. Arranged by number of users, items with more distinct dependents stay in inner bands. Use Dependency depth to explore layering.</p>
+            <p class="q">The explorer follows references between live sections. Neighborhood depth adds related items; cells and arrows always represent direct references. Caller share uses all external references in the image, including hidden relationships. Symbol ranges can overlap and are not added to physical byte totals.</p>
+          </details>
+          <div class="explorer-detail" id="exDetail" hidden></div>
+        </div>
+        <details class="explorer-tools" id="exTools" open><summary>Explore and filter</summary>
+        <div class="explorer-tools-body">
+        <div class="explorer-controls">
+          <label>Detail<select id="exLevel"><option value="dom">Components / expanded subsystems</option><option value="mod">Subsystems</option><option value="symbol">Functions and data</option></select></label>
+          <label>Direction<select id="exDirection"><option value="both">Incoming and outgoing</option><option value="out">Dependencies</option><option value="in">Dependents</option></select></label>
+          <label>Neighborhood depth<select id="exHops"><option value="1">Direct neighbors</option><option value="2">Two hops</option><option value="3">Three hops</option><option value="4">Four hops</option></select></label>
+          <label>Reference types<select id="exType"><option value="all">All references</option><option value="cc">Code to code</option><option value="cd">Code to data</option><option value="dc">Data to code</option><option value="dd">Data to data</option></select></label>
+        </div>
+        <div class="explorer-actions"><button id="exFocusSelected" type="button">Focus selected subsystem</button><button id="exFocusSymbol" type="button">Focus selected section / symbol</button></div>
+        <div class="explorer-actions" id="exExpanded"></div>
+        <details id="exLimits"><summary>Display limits and shared infrastructure</summary><div class="explorer-controls">
+          <label>Visible nodes<select id="exNodes"><option value="30">30</option><option value="50" selected>50</option><option value="100">100</option></select></label>
+          <label>Visible relationships<select id="exEdges"><option value="75">75</option><option value="150" selected>150</option><option value="300">300</option></select></label>
+          <label>Strongest links per direction<select id="exStrongest"><option value="1">1 per item</option><option value="3">3 per item</option><option value="5">5 per item</option><option value="0">All within budget</option></select></label>
+          <label>Minimum reference count<input id="exMin" type="number" min="1" step="1" value="1"></label>
+          <label>Shared infrastructure<select id="exShared"><option value="show">Show shared items</option><option value="hide">Hide except focused items</option></select></label>
+        </div></details>
+        <form class="explorer-search" id="exPathForm"><label class="sr-only" for="exPathTarget">Find a directed path destination</label><input id="exPathTarget" type="search" placeholder="Path from pinned item to name or source path" autocomplete="off"><button type="submit">Find directed path</button></form>
+        <div class="explorer-path" id="exPath" role="status" aria-live="polite"></div>
+        </div></details>
+        </div>
+      </section>
+
+      <section class="view" id="v-groups" data-view-panel="connectivity:groups" hidden>
+        <div class="view-head"><div><h2>How <span id="skDom"></span> naturally groups</h2><p class="q">Left: the subsystems of the selected subsystem's top-level directory. Right: groups found from the references alone, which may include code from other directories. Width is code size in the image, so large buffers and tables do not drown out the structure. Hiding shared infrastructure regroups the code without it, since shared code otherwise glues unrelated groups together.</p></div>
+          <div class="ctrls"><div class="seg" role="group" aria-label="Shared infrastructure"><button data-set="hideInfra:show">Show shared</button><button data-set="hideInfra:hide">Hide shared</button></div></div></div>
+        <p class="take" id="skTake"></p>
+        <div class="scroll-x"><div class="sk-cols"><span>Subsystem in the source tree</span><span>Group it connects with</span></div><div id="sankey"></div></div>
+        <h3 class="sub" style="margin-top:22px">Files that may live in the wrong place</h3>
+        <p class="subq">References to and from each file, not counting references inside the file. A file is listed when it is pulled clearly harder toward one other subsystem than toward the rest of its own. Covers the whole image.</p>
+        <p class="take" id="misTake"></p>
+        <div class="scroll-x"><table class="tbl"><thead><tr><th>File</th><th>Lives in</th><th>Suggested home</th><th class="num">Refs at home</th><th class="num">Refs there</th><th class="num">In image</th></tr></thead><tbody id="misBody"></tbody></table></div>
+      </section>
+
+      </section>
+
+      <details class="fmt">
+        <summary>Data format for your own linker export</summary>
+        <p>The page reads two JSON formats, either plain or gzip-compressed (<code>.json.gz</code>). The columnar format is about a quarter of the size and parses faster; use it for large images. Everything runs in your browser and nothing is uploaded.</p>
+        <p><strong>Columnar format.</strong> String tables plus one array per attribute, indexed by section number. Directories and files form a tree of <code>[parent, name]</code> entries (<code>-1</code> is the top level); C++ scopes work the same way, and a section's full name is its scope chain plus its leaf name. <code>kind</code>: 0 code, 1 read-only data, 2 initialized data, 3 bss. <code>flags</code>: 1 eliminated by garbage collection, 2 root, 4 hot. References are grouped by source: section <em>i</em> refers to <code>targets[offsets[i] … offsets[i+1]-1]</code>, with relocation counts in <code>counts</code> (leave it out if every count is 1).</p>
+<pre>{
+  "format": "fia-columnar", "version": 1,
+  "title": "soc-fw r1234",
+  "regions": { "RAM": 536870912 },
+  "compression": { "patterns": ".*clade*",
+                   "codeRatio": 0.30, "dataRatio": 0.50, "decompressBufferBytes": 0 },
+  "strings": {
+    "dirs":   [[-1, "net"], [0, "tcp"], [1, "core"], [-1, "platform"], [3, "boot"], [4, "core"]],
+    "files":  [[2, "tcp_out.c"], [5, "start.c"]],
+    "scopes": [[-1, "net"], [0, "Socket"]],
+    "outs":   [".text", ".text.z", ".rodata", ".rodata.z", ".data", ".data.z", ".bss"]
+  },
+  "sections": {
+    "count": 4,
+    "size":  [312, 188, 940, 132],
+    "file":  [0, 0, 0, 1],
+    "out":   [0, 1, 0, 0],
+    "kind":  [0, 0, 0, 0],
+    "flags": [4, 0, 1, 2],
+    "scope": [-1, 1, -1, -1],
+    "name":  ["tcp_output", "send", "tcp_debug_dump", "Reset_Handler"]
+  },
+  "refs": { "offsets": [0, 0, 1, 2, 2], "targets": [0, 0], "counts": [2, 1] }
+}</pre>
+        <p><strong>Object format.</strong> One object per section in <code>nodes</code> (<code>id</code>, <code>name</code>, <code>path</code>, <code>kind</code>, <code>size</code>, and optionally <code>live</code>, <code>root</code>, <code>hot</code>, <code>out</code>, <code>class</code>) and one per reference in <code>edges</code> (<code>src</code>, <code>dst</code>, optional <code>count</code>). <code>title</code>, <code>regions</code> and <code>compression</code> are the same in both formats.</p>
+        <p>In both formats, subsystems are the first two directories of a section's path and colors follow the first directory. Include the sections garbage collection discards; they feed the eliminated-code views. Mark entry points, vector tables and <code>KEEP</code> sections as roots; without any, live sections nothing refers to are treated as roots. Sections whose output section matches the compression patterns count as stored compressed; hot sections stay uncompressed in projections. A few hundred thousand sections analyze in seconds; for millions, merge sections per object file before exporting.</p>
+      </details>
+    </main>
+
+    <aside class="inspector" aria-label="Selected subsystem">
+      <div class="ins-pick"><label for="modSelect">Subsystem</label><select id="modSelect"></select></div>
+      <div id="insBody"></div>
+    </aside>
+  </div>
+</div>
+<div class="tip" id="tip" hidden></div>
+<div class="busy" id="busy" hidden><p>Working…</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+/*CORE*/
+/*RELATIONSHIPS*/
+/*UI*/
+</script>
+</body>
+</html>
