@@ -107,7 +107,9 @@ public:
 
   // Options string format:
   //   "<key>=<value>[:<key>=<value>]*"
-  // Every field is a "key=value" pair, colon-delimited. Recognized keys:
+  // Every field is a "key=value" pair, colon-delimited. Surrounding whitespace
+  // in keys, values and comma-separated entries is ignored, allowing folded
+  // or literal multiline YAML Options strings. Recognized keys:
   //   section=<sectionName>[,<sectionName>]*
   //                     Required. A comma-separated list of one or more
   //                     target output section names; every listed section
@@ -179,7 +181,8 @@ public:
     std::string::size_type FieldStart = 0;
     while (true) {
       std::string::size_type ColonPos = Options.find(':', FieldStart);
-      std::string Field = Options.substr(FieldStart, ColonPos - FieldStart);
+      std::string_view Field = trimWhitespace(
+          std::string_view(Options).substr(FieldStart, ColonPos - FieldStart));
       std::string::size_type EqPos = Field.find('=');
       if (EqPos == std::string::npos) {
         if (!Field.empty() && pluginTrace())
@@ -187,8 +190,8 @@ public:
                        "malformed option field '"
                     << Field << "'\n";
       } else {
-        std::string Key = Field.substr(0, EqPos);
-        std::string Value = Field.substr(EqPos + 1);
+        std::string Key(trimWhitespace(Field.substr(0, EqPos)));
+        std::string Value(trimWhitespace(Field.substr(EqPos + 1)));
         if (Key == "section") {
           SawSection = true;
           std::vector<std::string> Sections;
@@ -735,20 +738,17 @@ private:
     Outputs.clear();
     if (Value == "none")
       return true;
-    size_t Start = 0;
-    while (true) {
-      size_t End = Value.find(',', Start);
-      std::string Name = Value.substr(Start, End - Start);
+    std::vector<std::string> Names;
+    splitOnComma(Value, Names);
+    for (const std::string &Name : Names) {
       if (Name != "csv" && Name != "json")
         return false;
       OutputFormat Format =
           Name == "csv" ? OutputFormat::CSV : OutputFormat::JSON;
       if (std::find(Outputs.begin(), Outputs.end(), Format) == Outputs.end())
         Outputs.push_back(Format);
-      if (End == std::string::npos)
-        return true;
-      Start = End + 1;
     }
+    return true;
   }
 
   bool pluginTrace() const {
@@ -759,12 +759,21 @@ private:
 #endif
   }
 
+  static std::string_view trimWhitespace(std::string_view Value) {
+    size_t First = Value.find_first_not_of(" \t\r\n\f\v");
+    if (First == std::string_view::npos)
+      return {};
+    return Value.substr(First,
+                        Value.find_last_not_of(" \t\r\n\f\v") - First + 1);
+  }
+
   static void splitOnComma(const std::string &S,
                            std::vector<std::string> &Out) {
     std::string::size_type Start = 0;
     while (true) {
       std::string::size_type Comma = S.find(',', Start);
-      Out.push_back(S.substr(Start, Comma - Start));
+      Out.emplace_back(
+          trimWhitespace(std::string_view(S).substr(Start, Comma - Start)));
       if (Comma == std::string::npos)
         break;
       Start = Comma + 1;
@@ -779,11 +788,9 @@ private:
   };
 
   static bool parseRangeBound(std::string_view Value, uint64_t &Bound) {
-    size_t First = Value.find_first_not_of(" \t\r\n\f\v");
-    if (First == std::string_view::npos)
+    Value = trimWhitespace(Value);
+    if (Value.empty())
       return false;
-    Value =
-        Value.substr(First, Value.find_last_not_of(" \t\r\n\f\v") - First + 1);
     int Base = 10;
     if (Value.size() >= 2 && Value[0] == '0' &&
         (Value[1] == 'x' || Value[1] == 'X')) {
