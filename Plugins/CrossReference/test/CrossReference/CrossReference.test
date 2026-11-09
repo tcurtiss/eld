@@ -18,7 +18,7 @@
 # full pre-GC connectivity graph. Garbage-collected status, when shown, is
 # indicated solely by an unknown ("?") address, with no separate tag.
 #
-# Also checks the format plugin option: format=text (the default) produces
+# Also checks the format plugin option: format=text produces
 # the compact catalog format; format=json produces the dashboard object JSON;
 # format=json_columnar produces its columnar JSON. An unrecognized format is
 # rejected with an error.

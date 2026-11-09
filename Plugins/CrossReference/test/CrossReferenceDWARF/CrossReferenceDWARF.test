@@ -3,10 +3,9 @@
 # Tests the CrossReference's symbol_details option: with symbol_details=dwarf, each
 # symbol in the dump is additionally qualified with its declaring source
 # file and line number, as recovered from DWARF debug info (in text format,
-# appended to the symbol name as "(source-file:line)"). By default (symbol_details
-# unset, therefore none),
-# no such information is looked up or
-# printed, exactly as before this option existed.
+# appended to the symbol name as "(source-file:line)"). symbol_details=dwarf
+# is the default. Explicit symbol_details=none disables source lookup and
+# annotations.
 #
 # The input is compiled with "-gdwarf-2 -mllvm -dwarf-inlined-strings=Enable"
 # rather than a plain "-g": ELD's DWARF plugin API parses each input file's

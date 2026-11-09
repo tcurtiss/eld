@@ -1,6 +1,6 @@
 #---CrossReferenceRobustness.test------------- Executable,LS --------------------#
 #BEGIN_COMMENT
-# Exercises CrossReference defaults, option diagnostics, symbol/edge filtering,
+# Exercises CrossReference text output, option diagnostics, symbol/edge filtering,
 # exact attribution, repeated-reference counts,
 # dashboard garbage-collection behavior, columnar invariants, KEEP roots,
 # empty graphs, gzip output, and output-file failures.
@@ -11,12 +11,12 @@ RUN: %clang %clangopts -c %p/Inputs/2.c -o %t2.o -ffunction-sections -fdata-sect
 RUN: %clang %clangopts -emit-llvm -c %p/Inputs/2.c -o %t2.bc
 
 RUN: rm -f xref_robust.txt
-RUN: %link %linkopts %t1.o %t2.bc -e main -o %tbitcode.out --plugin-config %p/Inputs/PluginConfigDefault.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %link %linkopts %t1.o %t2.bc -e main -o %tbitcode.out --plugin-config %p/Inputs/PluginConfigText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
 RUN: %filecheck <xref_robust.txt %s --check-prefix=BITCODE
 
 RUN: rm -f xref_robust.txt
-RUN: %link %linkopts %t1.o %t2.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfigDefault.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-DEFAULT
+RUN: %link %linkopts %t1.o %t2.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfigText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-TEXT
 
 RUN: rm -f xref_robust.txt
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigIncludeExclude.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
@@ -88,20 +88,20 @@ LINK-NOT: Error
 
 BITCODE: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
 
-DUMP-DEFAULT: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
-DUMP-DEFAULT-DAG: [[CALLER:[0-9]+]]{{[[:space:]]}}caller{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
-DUMP-DEFAULT-DAG: [[TARGET:[0-9]+]]{{[[:space:]]}}target{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
-DUMP-DEFAULT-DAG: [[REMOTE:[0-9]+]]{{[[:space:]]}}remote{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
-DUMP-DEFAULT-DAG: [[SELF:[0-9]+]]{{[[:space:]]}}self_ref{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
-DUMP-DEFAULT-DAG: [[PTR:[0-9]+]]{{[[:space:]]}}global_ptr{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
-DUMP-DEFAULT-DAG: [[GLOBAL:[0-9]+]]{{[[:space:]]}}global_data{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
-DUMP-DEFAULT-DAG: common_data{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
-DUMP-DEFAULT-NOT: local_fn
-DUMP-DEFAULT-NOT: local_data
-DUMP-DEFAULT: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
-DUMP-DEFAULT: [[CALLER]]{{[[:space:]]}}[[TARGET]]{{[[:space:]]}}2{{[[:space:]]}}-
-DUMP-DEFAULT: [[SELF]]{{[[:space:]]}}[[SELF]]{{[[:space:]]}}1{{[[:space:]]}}-
-DUMP-DEFAULT: [[PTR]]{{[[:space:]]}}[[GLOBAL]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-TEXT: # Symbols: <id>{{[[:space:]]}}<name>{{[[:space:]]}}<file>{{[[:space:]]}}0x<size>{{[[:space:]]}}<address>{{[[:space:]]}}<output-section>
+DUMP-TEXT-DAG: [[CALLER:[0-9]+]]{{[[:space:]]}}caller{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-TEXT-DAG: [[TARGET:[0-9]+]]{{[[:space:]]}}target{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-TEXT-DAG: [[REMOTE:[0-9]+]]{{[[:space:]]}}remote{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-TEXT-DAG: [[SELF:[0-9]+]]{{[[:space:]]}}self_ref{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-TEXT-DAG: [[PTR:[0-9]+]]{{[[:space:]]}}global_ptr{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-TEXT-DAG: [[GLOBAL:[0-9]+]]{{[[:space:]]}}global_data{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-TEXT-DAG: common_data{{[[:space:]]}}{{.*}}{{[[:space:]]}}0x{{[0-9a-f]+}}{{[[:space:]]}}0x{{[0-9a-f]+}}
+DUMP-TEXT-NOT: local_fn
+DUMP-TEXT-NOT: local_data
+DUMP-TEXT: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:space:]]}}<flags>
+DUMP-TEXT: [[CALLER]]{{[[:space:]]}}[[TARGET]]{{[[:space:]]}}2{{[[:space:]]}}-
+DUMP-TEXT: [[SELF]]{{[[:space:]]}}[[SELF]]{{[[:space:]]}}1{{[[:space:]]}}-
+DUMP-TEXT: [[PTR]]{{[[:space:]]}}[[GLOBAL]]{{[[:space:]]}}1{{[[:space:]]}}-
 
 DUMP-INCLUDE-EXCLUDE: # Symbols:
 DUMP-INCLUDE-EXCLUDE: caller

@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_robust.txt
+    Options: file=xref_robust.txt:format=text:symbol_details=none:cpp_demangle=no

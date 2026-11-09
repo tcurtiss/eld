@@ -1,0 +1,103 @@
+# CrossReference linker-plugin configuration template
+# Copy this file, edit the example at the bottom, and pass it to ELD:
+#   --plugin-config /path/to/crossreference.yaml
+# Make the plugin library discoverable through the ELD plugin/runtime paths.
+#
+# Options are colon-separated key=value tokens. Whitespace around tokens is
+# ignored, so Options can use YAML folded (>-) or literal (|-) block scalars.
+# Keep a colon after every option except the last; do not put comments inside
+# the Options block. Values may contain spaces but cannot contain colons.
+# Booleans are case-sensitive yes/no. Glob lists are comma-separated.
+#
+# Output and detail options
+#   file=<path>                          REQUIRED
+#     Output path, relative to the linker's working directory if not absolute.
+#     Existing contents are replaced. Parent directories must already exist.
+#   format=text|json|json_columnar        default: json_columnar
+#     text: symbol catalog and attributed references.
+#     json: dashboard objects; json_columnar: compact dashboard columns (v1).
+#   gzip=yes|no                          default: no
+#     Gzip the output and append .gz to file; use file=image.json, not .json.gz.
+#   cpp_demangle=yes|no                  default: yes
+#     Readable C++ display names, scope grouping, and text-filter name matching.
+#     Raw ELF names remain in symbolDetails.linkageName.
+#   symbol_details=none|elf|dwarf         default: dwarf
+#     elf adds symbol identities and attributed references to JSON.
+#     dwarf also recovers declaration files/lines from debug info (compile -g).
+#     Missing DWARF falls back to ELF details. Text gains source annotations.
+#   fragment_details=none|data|all        default: data
+#     Logical initializer metadata: data containers, or also functions with all.
+#     Requires JSON and symbol_details=elf/dwarf. The implicit default disables
+#     itself for format=text or symbol_details=none; explicit conflicts error.
+#
+# Path options
+#   source_root=<path>                   default: unset
+#     Strip a complete path prefix from object, DWARF, and dashboard paths.
+#   strip_prefix=<glob>                  default: unset
+#     Strip the longest matching complete path prefix. Cannot use source_root
+#     and strip_prefix together.
+#   coalesce_dirs=none|unary              default: unary
+#     Fold empty single-child directory chains after the first two components
+#     in JSON ownership paths. Set none to preserve the full directory tree.
+#
+# Dashboard build metadata (JSON only)
+#   title=<text>                         default: unset
+#     Image/build label; the dashboard uses the loaded filename when omitted.
+#   region=<name>,<start>,<size>          default: automatic when available
+#     Repeat this option for multiple unique names. Start and size are decimal
+#     byte values, e.g. region=RAM,2147483648,536870912. Explicit entries override
+#     automatic MEMORY regions with the same name; useful for older ELD SDKs.
+#   root_symbols=<globs>                 default: no additional annotations
+#     Mark matching RAW ELF symbol names as roots, e.g. Reset_Handler,vector_*.
+#     This annotates live sections and never changes garbage collection.
+#   compression_patterns=<patterns>      default: unset
+#     Output-section eligibility globs, e.g. .text.z,.data.z. The dashboard
+#     accepts commas or spaces; its fallback pattern is .*clade*.
+#   compression_code_ratio=<number>      default: unset (dashboard: 0.30)
+#   compression_data_ratio=<number>      default: unset (dashboard: 0.50)
+#     Estimated stored/raw size fractions, finite and between 0 and 1.
+#   compression_buffer_bytes=<bytes>     default: unset (dashboard: 0)
+#     Fixed decompressor RAM overhead. These settings describe estimates;
+#     they do not compress linker output or measure compressed sizes.
+#     Byte values and region ends must be <= 9007199254740991 (2^53 - 1).
+#
+# Text graph options (do not filter dashboard sections or JSON symbol details)
+#   show_gc=yes|no                       default: no
+#     Include garbage-collected symbols/references; their addresses are unknown.
+#   include_symbols=<globs>              default: unset
+#     Include only symbols matching at least one name pattern.
+#   exclude_symbols=<globs>              default: unset
+#     Exclude matching symbols and their references.
+#   exclude_files=<globs>                default: unset
+#     Exclude matching resolved object-file paths and their symbols/references.
+#   exclude_local=yes|no                 default: yes
+#     Exclude local/static symbols and generated labels.
+#   exclude_functions=yes|no             default: no
+#     Exclude ELF STT_FUNC symbols and their references.
+#   exclude_data=yes|no                  default: no
+#     Exclude ELF STT_OBJECT symbols and their references.
+#   min_size=<bytes>                     default: 0
+#     Minimum symbol size; omit smaller symbols and their references.
+#   min_refs=<count>                     default: 0
+#     Minimum incoming relocation count, computed before other text filters.
+#   exclude_intra_file=yes|no            default: no
+#     Omit references whose endpoints belong to the same resolved object file.
+#
+# Available section addresses/alignment are exported automatically. ELD plugin
+# API 4.1 also exports evaluated MEMORY regions and entry/explicit symbol roots;
+# KEEP sections are roots too. Root/region options supplement this metadata.
+#
+# Multiline example: explicitly shows the dashboard defaults and enables gzip.
+# Add source_root=/your/build/root: before the last option to clean paths.
+GlobalPlugins:
+  - Type: LinkerPlugin
+    Name: CrossReference
+    Library: CrossReference
+    Options: >-
+      file=crossreference.json:
+      format=json_columnar:
+      cpp_demangle=yes:
+      symbol_details=dwarf:
+      fragment_details=data:
+      coalesce_dirs=unary:
+      gzip=yes

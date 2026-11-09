@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_dump.txt:symbol_details=dwarf
+    Options: file=xref_dump.txt:symbol_details=dwarf:format=text:cpp_demangle=no
