@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_robust.json:format=json:show_gc=no:exclude_symbols=unused:exclude_local=yes
+    Options: output_suffix=xref_robust:format=json:show_gc=no:exclude_symbols=unused:exclude_local=yes

@@ -43,17 +43,17 @@ if mode == 'configs':
     for name, opts in modes.items():
         text = ('GlobalPlugins:\n  - Type: LinkerPlugin\n    Name: CrossReference\n'
                 '    Library: CrossReference\n    Options: ')
-        options = 'file=' + str(base / (name + '.json')) + ':coalesce_dirs=none:' + opts
+        options = 'output_suffix=' + name + ':coalesce_dirs=none:' + opts
         if name != 'demangled':
             options += ':cpp_demangle=no'
         (base / (name + '.yaml')).write_text(text + json.dumps(options) + '\n')
 elif mode == 'check':
-    plain, no = load(base / 'plain.json')
-    explicit_none, explicit_no = load(base / 'none.json')
-    detail, rich = load(base / 'detail.json')
+    plain, no = load(base / 'out.plain.json')
+    explicit_none, explicit_no = load(base / 'out.none.json')
+    detail, rich = load(base / 'out.detail.json')
     assert no is None and explicit_no is None and plain == explicit_none
     assert plain['nodes'] == detail['nodes'] and plain['edges'] == detail['edges']
-    with open(base / 'fragments.json') as f:
+    with open(base / 'out.fragments.json') as f:
         fragments = json.load(f)['symbolDetails']['initializerFragments']['refs']
     assert fragments['container']
     assert len(fragments['container']) == len(fragments['targetSection'])
@@ -62,21 +62,21 @@ elif mode == 'check':
     assert all(c > 0 for c in fragments['ownerCount'])
     assert any(c == 1 for c in fragments['ownerCount'])
     assert any(c > 1 for c in fragments['ownerCount'])
-    with open(base / 'fragments_object.json') as f:
+    with open(base / 'out.fragments_object.json') as f:
         object_fragments = json.load(f)['symbolDetails']['initializerFragments']['refs']
     assert len(object_fragments) == len(fragments['container'])
     assert all(r['class'] in range(1, 7) and r['count'] > 0
                and r['ownerCount'] > 0 for r in object_fragments)
-    assert rich == load(base / 'filtered.json')[1]
-    dwarf = load(base / 'dwarf.json')[1]
-    assert dwarf == load(base / 'columnar.json')[1] == load(base / 'gzip.json.gz')[1]
-    assert dwarf == load(base / 'serial.json')[1]
-    demangled = load(base / 'demangled.json')[1]
+    assert rich == load(base / 'out.filtered.json')[1]
+    dwarf = load(base / 'out.dwarf.json')[1]
+    assert dwarf == load(base / 'out.columnar.json')[1] == load(base / 'out.gzip.json.gz')[1]
+    assert dwarf == load(base / 'out.serial.json')[1]
+    demangled = load(base / 'out.demangled.json')[1]
     assert any(s['name'] == 'demo::overload(int)' for s in demangled['symbols'])
     for actual, expected in zip(demangled['symbols'], dwarf['symbols']):
         actual['name'] = expected['name']
     assert demangled == dwarf
-    stripped, stripped_details = load(base / 'strip.json')
+    stripped, stripped_details = load(base / 'out.strip.json')
     assert stripped_details['sourceFiles'] == ['Inputs/a.cpp', 'Inputs/b.c']
     assert stripped_details['symbols'] == dwarf['symbols']
     assert stripped_details['refs'] == dwarf['refs']
@@ -116,24 +116,24 @@ elif mode == 'check':
                 assert rich['symbols'][e[key]]['section'] == e[section]
     print('details: section invariance, symbol identity, sources, aliases, flags, formats and threads OK')
 elif mode == 'missing':
-    with open(base / 'dwarf.json') as f:
+    with open(base / 'out.dwarf.json') as f:
         details = json.load(f)['symbolDetails']
     assert details['symbols'] and 'sourceFiles' not in details
     assert all('sourceFile' not in s and 'sourceLine' not in s
                for s in details['symbols'])
-    with open(base / 'columnar.json') as f:
+    with open(base / 'out.columnar.json') as f:
         columnar = json.load(f)['symbolDetails']
     assert 'sourceFiles' not in columnar
     assert 'sourceFile' not in columnar['symbols']
     assert 'sourceLine' not in columnar['symbols']
 elif mode == 'approx':
-    details = load(base / 'detail.json')[1]
+    details = load(base / 'out.detail.json')[1]
     assert any(e['flags'] & 1 for e in details['refs'])
     assert any(e['flags'] & 2 and e['src'] == -1 for e in details['refs'])
 elif mode == 'compare':
     assert load(base)[1] == load(pathlib.Path(sys.argv[3]))[1]
 elif mode == 'gc':
-    data, details = load(base / 'dwarf.json')
+    data, details = load(base / 'out.dwarf.json')
     unused = next(s for s in details['symbols'] if s['linkageName'] == '_Z6unusedv')
     assert unused['sourceLine'] == 12
     assert data['nodes'][unused['section']]['live'] is False

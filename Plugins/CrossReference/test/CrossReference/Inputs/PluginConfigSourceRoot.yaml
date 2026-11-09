@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_root.json:format=json:source_root=/
+    Options: output_suffix=xref_root:format=json:source_root=/

@@ -6,8 +6,8 @@
 //
 // Builds a symbol-level caller-to-callee cross-reference table and writes it
 // to a dump file, as compact text or dashboard JSON (columnar by default).
-// Unlike the linker's built-in --cref table (which records, per symbol, only the
-// *input files* that reference it), this plugin records the specific
+// Unlike the linker's built-in --cref table (which records, per symbol, only
+// the *input files* that reference it), this plugin records the specific
 // *referring symbol* for each reference, when it can be determined.
 //
 // Local symbols are not unique by name (e.g. a static helper named "helper"
@@ -62,9 +62,9 @@
 // possibly stub-rewritten target symbols by the time this hook fires.
 //
 // Options string format: a colon-delimited list of key=value tokens. The
-// "file" key is required and gives the path of the file to write the
-// cross-reference table to. The remaining keys are optional:
-//   file=<path>          -- path of the dump file to write (required).
+// dump path is <linker-output>.<output_suffix>.json. All options are optional:
+//   output_suffix=<name> -- filename suffix for the dump (default: crossref).
+//                          The suffix is followed by .json for every format.
 //   format=text|json|json_columnar
 //                          -- output format for the dump (default:
 //                            json_columnar).
@@ -74,7 +74,7 @@
 //                            image_analysis. "json_columnar" produces its
 //                            compressed columnar format.
 //   gzip=yes|no             -- compress the output using gzip and append
-//                            ".gz" to the file path (default: no).
+//                            ".gz" to the dump path (default: no).
 //   coalesce_dirs=none|unary
 //                          -- in JSON formats, fold empty single-child
 //                            directory chains after the first two path
@@ -159,7 +159,8 @@
 //                            cross-file references (default: no). Unlike
 //                            the other filters, this affects only edges, not
 //                            the symbols list.
-// e.g. "file=image.json" uses the dashboard defaults.
+// e.g. "gzip=yes" writes <linker-output>.crossref.json.gz with dashboard
+// defaults.
 //
 //===----------------------------------------------------------------------===//
 
@@ -390,16 +391,24 @@ public:
       }
       std::string Key = Token.substr(0, Eq);
       std::string Value = Token.substr(Eq + 1);
-      if (Key == "file") {
-        if (!DumpPath.empty()) {
+      if (Key == "output_suffix") {
+        if (HasOutputSuffix) {
           HasError = true;
           getLinker()->reportDiag(getLinker()->getErrorDiagID(
-              "CrossReference was given more than one 'file' option "
-              "in its Options string: '%0' and '%1'"),
-              DumpPath, Value);
+                                      "CrossReference was given more than one "
+                                      "'output_suffix' option "
+                                      "in its Options string: '%0' and '%1'"),
+                                  OutputSuffix, Value);
           return;
         }
-        DumpPath = Value;
+        if (Value.empty() || Value.find_first_of("/\\") != std::string::npos) {
+          optionError("output_suffix must be a non-empty filename suffix "
+                      "without path separators",
+                      Value);
+          return;
+        }
+        OutputSuffix = Value;
+        HasOutputSuffix = true;
         continue;
       }
       if (Key == "title") {
@@ -681,13 +690,6 @@ public:
       HasError = true;
       getLinker()->reportDiag(getLinker()->getErrorDiagID(
           "CrossReference does not recognize option '%0'"), Key);
-      return;
-    }
-    if (DumpPath.empty()) {
-      HasError = true;
-      getLinker()->reportDiag(getLinker()->getErrorDiagID(
-          "CrossReference requires a 'file=<path>' option in its "
-          "Options string"));
       return;
     }
     // The default initializer extension applies only when JSON symbol details
@@ -2622,6 +2624,8 @@ private:
   }
 
   void writeDump() {
+    const std::string DumpPath =
+        getLinker()->getOutputFileName() + "." + OutputSuffix + ".json";
     if (!Gzip) {
       std::ofstream Out(DumpPath, std::ios::out | std::ios::trunc);
       if (!Out) {
@@ -2651,7 +2655,8 @@ private:
     writeGzipDump(DumpPath + ".gz", Buffer.str());
   }
 
-  std::string DumpPath;
+  std::string OutputSuffix = "crossref";
+  bool HasOutputSuffix = false;
   bool HasError = false;
   bool ShowGC = false;
   bool CppDemangle = true;

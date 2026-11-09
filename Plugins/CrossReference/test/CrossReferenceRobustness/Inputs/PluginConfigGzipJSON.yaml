@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_gzip.json:format=json:gzip=yes
+    Options: output_suffix=xref_gzip:format=json:gzip=yes

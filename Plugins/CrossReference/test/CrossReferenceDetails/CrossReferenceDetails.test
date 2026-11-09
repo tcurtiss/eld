@@ -16,17 +16,17 @@ RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/gzip.ya
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/strip.yaml
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/demangled.yaml
 RUN: %link %linkopts --no-threads %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml
-RUN: cp %t/dwarf.json %t/serial.json
+RUN: cp %t/out.dwarf.json %t/out.serial.json
 RUN: %link %linkopts --threads --thread-count 4 %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml
 RUN: %python %p/check.py check %t
 RUN: %clangxx %clangopts -gdwarf-4 -O0 -fno-inline -fno-exceptions -fno-rtti -c %p/Inputs/a.cpp -o %t/a.o
 RUN: %clang %clangopts -gdwarf-4 -O0 -c %p/Inputs/b.c -o %t/b.o
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml
-RUN: %python %p/check.py compare %t/dwarf.json %t/serial.json
+RUN: %python %p/check.py compare %t/out.dwarf.json %t/out.serial.json
 RUN: %clangxx %clangopts -gdwarf-5 -O0 -fno-inline -fno-exceptions -fno-rtti -c %p/Inputs/a.cpp -o %t/a.o
 RUN: %clang %clangopts -gdwarf-5 -O0 -c %p/Inputs/b.c -o %t/b.o
 RUN: %link %linkopts %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml
-RUN: %python %p/check.py compare %t/dwarf.json %t/serial.json
+RUN: %python %p/check.py compare %t/out.dwarf.json %t/out.serial.json
 RUN: %clangxx %clangopts -g -O0 -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti -c %p/Inputs/a.cpp -o %t/a.o
 RUN: %clang %clangopts -g -O0 -ffunction-sections -fdata-sections -c %p/Inputs/b.c -o %t/b.o
 RUN: %link %linkopts --gc-sections %t/a.o %t/b.o -e entry -o %t/out --plugin-config %t/dwarf.yaml

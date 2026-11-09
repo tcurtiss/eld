@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_strip.json:format=json:strip_prefix=*/
+    Options: output_suffix=xref_strip:format=json:strip_prefix=*/

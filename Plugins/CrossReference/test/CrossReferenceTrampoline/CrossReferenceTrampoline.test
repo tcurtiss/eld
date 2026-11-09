@@ -10,10 +10,10 @@
 #END_COMMENT
 #START_TEST
 RUN: %clang %clangopts -o %t1.1.o %p/Inputs/1.c -c -ffunction-sections
-RUN: rm -f xref_trampoline_dump.txt
+RUN: rm -f %t1.1.out.xref_trampoline_dump.json
 RUN: %link %linkopts -o %t1.1.out %t1.1.o -T %p/Inputs/script.t --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_trampoline_dump.txt %s --check-prefix=DUMP
-RUN: rm -f xref_trampoline_dump.txt
+RUN: %filecheck <%t1.1.out.xref_trampoline_dump.json %s --check-prefix=DUMP
+RUN: rm -f %t1.1.out.xref_trampoline_dump.json
 #END_TEST
 
 LINK-NOT: Error

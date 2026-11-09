@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref_coalesced.json:format=json:coalesce_dirs=unary
+    Options: output_suffix=xref_coalesced:format=json:coalesce_dirs=unary

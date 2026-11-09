@@ -29,44 +29,44 @@ RUN: mkdir -p %t.deep/Level1/Level2/Level3
 RUN: mkdir -p %t.deep/Level1/Overrides
 RUN: %clang %clangopts -c %p/Inputs/Deep/Level1/Level2/Level3/deep.c -o %t.deep/Level1/Level2/Level3/deep.o -ffunction-sections -fdata-sections
 RUN: %clang %clangopts -c %p/Inputs/Deep/Level1/Overrides/override.c -o %t.deep/Level1/Overrides/override.o -ffunction-sections -fdata-sections
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t1.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t1.out.xref_dump.json %s --check-prefix=DUMP
+RUN: rm -f %t1.serial.out.xref_dump.json
 RUN: %link --no-threads --emit-relocs %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t1.serial.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t1.serial.out.xref_dump.json %s --check-prefix=DUMP
+RUN: rm -f %t2.out.xref_dump.json
 RUN: %link %linkopts --gc-sections %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-GC-HIDDEN
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t2.out.xref_dump.json %s --check-prefix=DUMP-GC-HIDDEN
+RUN: rm -f %t3.out.xref_dump.json
 RUN: %link %linkopts --gc-sections %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigShowGC.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-GC-SHOWN
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t3.out.xref_dump.json %s --check-prefix=DUMP-GC-SHOWN
+RUN: rm -f %t4.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigFormatText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t4.out.xref_dump.json %s --check-prefix=DUMP
+RUN: rm -f %t5.out.xref_dump.json
 RUN: %not %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t5.out --plugin-config %p/Inputs/PluginConfigFormatInvalid.yaml 2>&1 | %filecheck %s --check-prefix=FORMAT-ERROR
-RUN: rm -f xref_dump.json
+RUN: rm -f %t6.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigFormatJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_dump.json')); print('JSON_OBJECT', bool(d['nodes']), bool(d['edges']), any(n['name'] == 'deep_rw_data' and n['kind'] == 'data' for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-JSON
-RUN: rm -f xref_dump.json
-RUN: rm -f xref_coalesced.json
+RUN: %python -c "import json; d = json.load(open('%t6.out.xref_dump.json')); print('JSON_OBJECT', bool(d['nodes']), bool(d['edges']), any(n['name'] == 'deep_rw_data' and n['kind'] == 'data' for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-JSON
+RUN: rm -f %t6.out.xref_dump.json
+RUN: rm -f %t7.out.xref_coalesced.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t7.out --plugin-config %p/Inputs/PluginConfigFormatJSONCoalesced.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_coalesced.json')); print('JSON_COALESCED', d['coalesce_dirs'], any('\u27eb' in n['path'] for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-JSON-COALESCED
-RUN: rm -f xref_coalesced.json
-RUN: rm -f xref_columnar.json
+RUN: %python -c "import json; d = json.load(open('%t7.out.xref_coalesced.json')); print('JSON_COALESCED', d['coalesce_dirs'], any('\u27eb' in n['path'] for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-JSON-COALESCED
+RUN: rm -f %t7.out.xref_coalesced.json
+RUN: rm -f %t9.out.xref_columnar.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t9.out --plugin-config %p/Inputs/PluginConfigFormatColumnar.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_columnar.json')); print('JSON_COLUMNAR', d['format'], d['version'], d['sections']['count'] == len(d['sections']['size']), len(d['refs']['offsets']) == d['sections']['count'] + 1)" | %filecheck %s --check-prefix=DUMP-COLUMNAR
-RUN: rm -f xref_coalesced_columnar.json
+RUN: %python -c "import json; d = json.load(open('%t9.out.xref_columnar.json')); print('JSON_COLUMNAR', d['format'], d['version'], d['sections']['count'] == len(d['sections']['size']), len(d['refs']['offsets']) == d['sections']['count'] + 1)" | %filecheck %s --check-prefix=DUMP-COLUMNAR
+RUN: rm -f %t12.out.xref_coalesced_columnar.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t12.out --plugin-config %p/Inputs/PluginConfigFormatColumnarCoalesced.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_coalesced_columnar.json')); print('JSON_COLUMNAR_COALESCED', d['coalesce_dirs'], any('\u27eb' in x[1] for x in d['strings']['dirs']))" | %filecheck %s --check-prefix=DUMP-COLUMNAR-COALESCED
-RUN: rm -f xref_coalesced_columnar.json
-RUN: rm -f xref_root.json
+RUN: %python -c "import json; d = json.load(open('%t12.out.xref_coalesced_columnar.json')); print('JSON_COLUMNAR_COALESCED', d['coalesce_dirs'], any('\u27eb' in x[1] for x in d['strings']['dirs']))" | %filecheck %s --check-prefix=DUMP-COLUMNAR-COALESCED
+RUN: rm -f %t12.out.xref_coalesced_columnar.json
+RUN: rm -f %t10.out.xref_root.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t10.out --plugin-config %p/Inputs/PluginConfigSourceRoot.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_root.json')); print('SOURCE_ROOT', all(not n['path'].startswith('/') for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-SOURCE-ROOT
-RUN: rm -f xref_strip.json
+RUN: %python -c "import json; d = json.load(open('%t10.out.xref_root.json')); print('SOURCE_ROOT', all(not n['path'].startswith('/') for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-SOURCE-ROOT
+RUN: rm -f %t11.out.xref_strip.json
 RUN: %link %linkopts %t1.1.o %t.deep/Level1/Level2/Level3/deep.o %t.deep/Level1/Overrides/override.o -e main -o %t11.out --plugin-config %p/Inputs/PluginConfigStripPrefix.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d = json.load(open('xref_strip.json')); print('STRIP_PREFIX', all('/' not in n['path'] for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-STRIP-PREFIX
+RUN: %python -c "import json; d = json.load(open('%t11.out.xref_strip.json')); print('STRIP_PREFIX', all('/' not in n['path'] for n in d['nodes']))" | %filecheck %s --check-prefix=DUMP-STRIP-PREFIX
 #END_TEST
 
 LINK-NOT: Error

@@ -73,7 +73,7 @@ def main():
         source = work / "input.c"
         obj = work / "input.o"
         output = work / "image.out"
-        dump = work / "xref.json"
+        dump = Path(str(output) + ".crossref.json")
         source.write_text("""
             extern int target;
             int target_data = 7;
@@ -93,7 +93,7 @@ def main():
                   "  - Type: LinkerPlugin\n"
                   "    Name: CrossReference\n"
                   "    Library: CrossReference\n"
-                  "    Options: file={}:format=json:gzip=yes\n").format(dump)
+                  "    Options: format=json:gzip=yes\n")
         config_path = work / "plugins.yaml"
         config_path.write_text(config)
         link_command = [args.target_ld]
@@ -109,6 +109,33 @@ def main():
             raise RuntimeError("CrossReference JSON did not contain expected symbols")
         if not document["edges"]:
             raise RuntimeError("CrossReference JSON did not contain edges")
+
+        # Naming comes from the link output, including its directory and full
+        # filename. Empty options and an omitted -o both use their defaults.
+        for image, options, suffix, compressed in (
+                (work / "nested output" / "firmware release.elf", "", "crossref", False),
+                (work / "custom.elf", "output_suffix=references:gzip=yes", "references", True),
+                (None, "", "crossref", False)):
+            if image is not None:
+                image.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text("GlobalPlugins:\n  - Type: LinkerPlugin\n"
+                                   "    Name: CrossReference\n    Library: CrossReference\n"
+                                   "    Options: " + json.dumps(options) + "\n")
+            command = [args.target_ld] + args.target_ld_args + args.target_ld_arg
+            command += [str(obj), "-e", "main", "--plugin-config", str(config_path)]
+            if image is not None:
+                command += ["-o", str(image)]
+            run(command, env, work)
+            expected = Path(str(image or work / "a.out") + "." + suffix + ".json")
+            if compressed:
+                assert not expected.exists(), "gzip must not also write plain JSON"
+                with gzip.open(Path(str(expected) + ".gz"), "rt") as stream:
+                    document = json.load(stream)
+            else:
+                document = json.loads(expected.read_text())
+            assert document["format"] == "fia-columnar"
+            assert {"main", "target_function", "target_data"}.issubset(document["sections"]["name"])
+            assert document["refs"]["targets"]
 
 
 if __name__ == "__main__":

@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=a.txt:file=b.txt
+    Options: output_suffix=a:output_suffix=b

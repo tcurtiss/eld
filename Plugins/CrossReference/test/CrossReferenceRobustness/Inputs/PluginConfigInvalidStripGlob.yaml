@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref.txt:strip_prefix=[unterminated
+    Options: output_suffix=xref:strip_prefix=[unterminated

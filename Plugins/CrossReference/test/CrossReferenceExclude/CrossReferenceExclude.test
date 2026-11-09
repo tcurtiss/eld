@@ -20,13 +20,13 @@
 #START_TEST
 RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections
 RUN: %clang %clangopts -c %p/Inputs/2.c -o %t1.2.o -ffunction-sections
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t1.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o %t1.2.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfigExcludeSymbols.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-SYMBOLS
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t1.out.xref_dump.json %s --check-prefix=DUMP-EXCLUDE-SYMBOLS
+RUN: rm -f %t2.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o %t1.2.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigExcludeFiles.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-FILES
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t2.out.xref_dump.json %s --check-prefix=DUMP-EXCLUDE-FILES
+RUN: rm -f %t3.out.xref_dump.json
 RUN: %not %link %linkopts %t1.1.o %t1.2.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigExcludeSymbolsInvalid.yaml 2>&1 | %filecheck %s --check-prefix=GLOB-ERROR
 #END_TEST
 

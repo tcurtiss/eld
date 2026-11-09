@@ -116,14 +116,16 @@ SECTIONS {
 }
 """)
         files = []
+        image = exports / "image.out"
         for details in ("none", "elf", "dwarf"):
             for fmt in ("json", "json_columnar"):
-                output = exports / (details + "." + fmt + ".json")
-                options = ("file={}:format={}:symbol_details={}:gzip=yes:"
+                suffix = details + "." + ("object" if fmt == "json" else "columnar")
+                output = Path(str(image) + "." + suffix + ".json")
+                options = ("output_suffix={}:format={}:symbol_details={}:gzip=yes:"
                            "source_root={}:exclude_local=no:cpp_demangle=yes:"
                            "title=Dashboard fixture:compression_patterns=.text:"
                            "compression_code_ratio=0.25:compression_data_ratio=0.5:"
-                           "compression_buffer_bytes=4096:root_symbols=unused_*").format(output, fmt, details, work)
+                           "compression_buffer_bytes=4096:root_symbols=unused_*").format(suffix, fmt, details, work)
                 if not args.automatic_metadata:
                     options += ":region=CODE,65536,32768:region=RAM,2097152,16384:root_symbols=main,forced_root"
                 if details != "none":
@@ -133,11 +135,11 @@ SECTIONS {
                                   "    Name: CrossReference\n    Library: CrossReference\n"
                                   "    Options: " + json.dumps(options) + "\n")
                 command = [args.target_ld] + args.target_ld_args + args.target_ld_arg
-                command += objects + ["--gc-sections", "-u", "forced_root", "-T", str(script), "-o", str(work / "image.out"),
+                command += objects + ["--gc-sections", "-u", "forced_root", "-T", str(script), "-o", str(image),
                                       "--plugin-config", str(config)]
                 run(command, env, work)
                 files.append(str(output) + ".gz")
-        _, symbols = elf_records(work / "image.out")
+        _, symbols = elf_records(image)
         expected = {}
         for obj in objects:
             sections, _ = elf_records(Path(obj))
@@ -152,12 +154,14 @@ SECTIONS {
 
         # Omission and invalid settings are part of the producer contract.
         def export(extra, succeeds=True, entry="main", link_script=script,
-                   fmt="json", configuration=None):
-            output = work / "optional.json"
+                   fmt="json", configuration=None, suffix=None, image=None):
+            image = image or work / "image.out"
+            image.parent.mkdir(parents=True, exist_ok=True)
+            output = Path(str(image) + "." + (suffix or "crossref") + ".json")
             output.unlink(missing_ok=True)
             compressed_output = Path(str(output) + ".gz")
             compressed_output.unlink(missing_ok=True)
-            options = "file={}".format(output)
+            options = "output_suffix=" + suffix if suffix is not None else ""
             if fmt:
                 options += ":format=" + fmt
             options += extra
@@ -167,7 +171,7 @@ SECTIONS {
                                "    Options: " + json.dumps(options) + "\n"))
             command = [args.target_ld] + args.target_ld_args + args.target_ld_arg + objects
             command += ["--gc-sections", "-T", str(link_script), "-e", entry,
-                        "-o", str(work / "image.out"), "--plugin-config", str(config)]
+                        "-o", str(image), "--plugin-config", str(config)]
             result = subprocess.run(command, cwd=work, env=env, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             if succeeds:
@@ -193,10 +197,14 @@ SECTIONS {
 
         defaults = export("", fmt=None)
         check_defaults(defaults)
+        assert export(":gzip=yes", fmt=None) == defaults
+        assert not (work / "image.out.crossref.json").exists()
+        assert (work / "image.out.crossref.json.gz").exists()
+        assert export(":gzip=yes", fmt=None, suffix="references",
+                      image=work / "nested output" / "firmware release.elf") == defaults
         template = Path(__file__).resolve().parent.parent / "CrossReference.template.yaml"
         # Load the actual YAML through ELD, exercising its folded scalar parser.
-        configuration = template.read_text().replace("file=crossreference.json:",
-                                                     "file=" + str(work / "optional.json") + ":")
+        configuration = template.read_text()
         folded = export("", fmt=None, configuration=configuration)
         check_defaults(folded)
         assert folded == defaults
@@ -228,7 +236,11 @@ SECTIONS {
         override = export(":region=CODE,65536,4096:compression_code_ratio=0:compression_buffer_bytes=0")
         assert override["regions"]["CODE"]["size"] == 4096
         assert override["compression"] == {"codeRatio": 0, "decompressBufferBytes": 0}
-        for invalid in (":compression_code_ratio=nan", ":compression_code_ratio=1.1",
+        for invalid in (":output_suffix=", ":output_suffix=subdir/report",
+                        ":output_suffix=subdir\\report",
+                        ":output_suffix=first:output_suffix=second",
+                        ":file=legacy.json",
+                        ":compression_code_ratio=nan", ":compression_code_ratio=1.1",
                         ":compression_data_ratio=-0.1", ":compression_buffer_bytes=+1", ":compression_buffer_bytes= 1", ":compression_data_ratio=0.3junk",
                         ":compression_buffer_bytes=9007199254740992",
                         ":region=RAM,9007199254740991,1", ":region=RAM,-1,100",

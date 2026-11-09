@@ -182,14 +182,14 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref.txt:format=text:cpp_demangle=yes
+    Options: output_suffix=xref:format=text:cpp_demangle=yes
 ```
 
 The supported options are:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `file=<path>` | required | Output file. Existing contents are replaced. |
+| `output_suffix=<name>` | `crossref` | Writes `<linker-output>.<name>.json` beside the linker output. Existing contents are replaced. |
 | `format=text\|json\|json_columnar` | `json_columnar` | Selects the output format. |
 | `gzip=yes\|no` | `no` | Compresses the selected output format as gzip and appends `.gz` to the output path. |
 | `source_root=<path>` | unset | Removes this complete path prefix from object-file paths, DWARF paths, and dashboard paths. |
@@ -209,14 +209,19 @@ The supported options are:
 | `min_refs=<n>` | `0` | Omits symbols with fewer than this many incoming references and their edges. |
 | `exclude_intra_file=yes\|no` | `no` | Omits edges whose caller and target have the same resolved input-file path. |
 
-`yes`/`no` values are case-sensitive. Unknown options, duplicate `file`
-options, malformed numbers or globs, missing `file`, and simultaneous
+All options are optional. An empty Options string uses the dashboard defaults.
+`yes`/`no` values are case-sensitive. Unknown options (including the replaced
+`file` option), duplicate `output_suffix` options, empty suffixes or suffixes
+containing path separators, malformed numbers or globs, and simultaneous
 `source_root`/`strip_prefix` options are errors.
 
 When `gzip=yes`, the plugin writes the serialized text or JSON output to
-`<file>.gz`; the uncompressed file is not created. This applies to all three
-output formats. For example, `file=xref.json:format=json:gzip=yes` writes
-`xref.json.gz`.
+`<linker-output>.<output_suffix>.json.gz`; the uncompressed file is not created.
+This naming applies to all three output formats, including text. For example,
+linking with `-o firmware.elf` and `gzip=yes` writes
+`firmware.elf.crossref.json.gz`; adding `output_suffix=references` writes
+`firmware.elf.references.json.gz`. Supply the suffix without `.json` or `.gz`;
+these extensions are added automatically.
 
 ### Path cleanup
 
@@ -506,7 +511,7 @@ additionally includes source locations when they are recovered; otherwise its
 JSON output falls back to the `elf` detail schema. For example:
 
 ```yaml
-Options: file=xref.json:format=json_columnar:symbol_details=dwarf:strip_prefix=*/src/:gzip=yes
+Options: output_suffix=xref:format=json_columnar:symbol_details=dwarf:strip_prefix=*/src/:gzip=yes
 ```
 
 Both JSON formats use the following fields:
@@ -602,5 +607,5 @@ consumer supplies its existing defaults for omitted fields.
 For example, a columnar export configured for an older SDK might use:
 
 ```text
-file=image.json:format=json_columnar:gzip=yes:cpp_demangle=yes:title=firmware r123:region=RAM,2147483648,536870912:root_symbols=Reset_Handler,vector_table:compression_patterns=.text.z,.data.z:compression_code_ratio=0.3:compression_data_ratio=0.5:compression_buffer_bytes=4096
+output_suffix=crossref:format=json_columnar:gzip=yes:cpp_demangle=yes:title=firmware r123:region=RAM,2147483648,536870912:root_symbols=Reset_Handler,vector_table:compression_patterns=.text.z,.data.z:compression_code_ratio=0.3:compression_data_ratio=0.5:compression_buffer_bytes=4096
 ```

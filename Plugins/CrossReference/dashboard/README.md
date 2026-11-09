@@ -114,7 +114,7 @@ Prefer the **columnar** format: about a quarter of the size of the object format
 CrossReference exports can include optional symbol metadata:
 
 ```yaml
-Options: file=xref.json:format=json_columnar:symbol_details=dwarf:gzip=yes
+Options: output_suffix=crossref:format=json_columnar:symbol_details=dwarf:gzip=yes
 ```
 
 Use `symbol_details=elf` when symbol names and reference pairs are sufficient

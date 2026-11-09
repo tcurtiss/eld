@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=xref.txt:source_root=/:strip_prefix=*
+    Options: output_suffix=xref:source_root=/:strip_prefix=*

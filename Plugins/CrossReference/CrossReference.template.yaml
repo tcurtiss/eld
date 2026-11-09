@@ -10,14 +10,15 @@
 # Booleans are case-sensitive yes/no. Glob lists are comma-separated.
 #
 # Output and detail options
-#   file=<path>                          REQUIRED
-#     Output path, relative to the linker's working directory if not absolute.
-#     Existing contents are replaced. Parent directories must already exist.
+#   output_suffix=<name>                 default: crossref
+#     Write <linker-output>.<name>.json beside the linker output, for every
+#     format. The suffix must be non-empty and contain no path separators.
+#     Existing contents are replaced. All options are optional.
 #   format=text|json|json_columnar        default: json_columnar
 #     text: symbol catalog and attributed references.
 #     json: dashboard objects; json_columnar: compact dashboard columns (v1).
 #   gzip=yes|no                          default: no
-#     Gzip the output and append .gz to file; use file=image.json, not .json.gz.
+#     Gzip the export and append .gz, e.g. firmware.elf.crossref.json.gz.
 #   cpp_demangle=yes|no                  default: yes
 #     Readable C++ display names, scope grouping, and text-filter name matching.
 #     Raw ELF names remain in symbolDetails.linkageName.
@@ -94,7 +95,7 @@ GlobalPlugins:
     Name: CrossReference
     Library: CrossReference
     Options: >-
-      file=crossreference.json:
+      output_suffix=crossref:
       format=json_columnar:
       cpp_demangle=yes:
       symbol_details=dwarf:

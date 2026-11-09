@@ -28,36 +28,36 @@ RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections -fdata-se
 RUN: %clang %clangopts -c %p/Inputs/2a.c -o %t1.2a.o -ffunction-sections -fdata-sections
 RUN: %clang %clangopts -c %p/Inputs/2b.c -o %t1.2b.o -ffunction-sections -fdata-sections
 
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t1.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfigIncludeSymbols.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-INCLUDE-SYMBOLS
+RUN: %filecheck <%t1.out.xref_dump.json %s --check-prefix=DUMP-INCLUDE-SYMBOLS
 
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t2.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigExcludeLocal.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-LOCAL
+RUN: %filecheck <%t2.out.xref_dump.json %s --check-prefix=DUMP-EXCLUDE-LOCAL
 
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t3.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigMinSize.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-MIN-SIZE
+RUN: %filecheck <%t3.out.xref_dump.json %s --check-prefix=DUMP-MIN-SIZE
 
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t4.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigMinRefs.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-MIN-REFS
+RUN: %filecheck <%t4.out.xref_dump.json %s --check-prefix=DUMP-MIN-REFS
 
 RUN: %not %link %linkopts %t1.1.o -e main -o %t5.out --plugin-config %p/Inputs/PluginConfigMinSizeInvalid.yaml 2>&1 | %filecheck %s --check-prefix=MIN-SIZE-ERROR
 
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t6.out.xref_dump.json
 RUN: %link %linkopts %t1.2a.o %t1.2b.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigExcludeIntraFile.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-INTRA-FILE
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t6.out.xref_dump.json %s --check-prefix=DUMP-EXCLUDE-INTRA-FILE
+RUN: rm -f %t7.out.xref_dump.json
 
 RUN: %link %linkopts %t1.1.o -e main -o %t7.out --plugin-config %p/Inputs/PluginConfigExcludeFunctions.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-FUNCTIONS
+RUN: %filecheck <%t7.out.xref_dump.json %s --check-prefix=DUMP-EXCLUDE-FUNCTIONS
 
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t8.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t8.out --plugin-config %p/Inputs/PluginConfigExcludeData.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-EXCLUDE-DATA
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t8.out.xref_dump.json %s --check-prefix=DUMP-EXCLUDE-DATA
+RUN: rm -f %t8.out.xref_dump.json
 #END_TEST
 
 LINK-NOT: Error

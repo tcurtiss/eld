@@ -19,16 +19,16 @@
 #END_COMMENT
 #START_TEST
 RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.1.o -ffunction-sections -fdata-sections -gdwarf-2 -mllvm -dwarf-inlined-strings=Enable
-RUN: rm -f xref_dump.txt
+RUN: rm -f %t1.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfig.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-NODWARF
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t1.out.xref_dump.json %s --check-prefix=DUMP-NODWARF
+RUN: rm -f %t2.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigSymbolDetailsDwarf.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-DWARF
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t2.out.xref_dump.json %s --check-prefix=DUMP-DWARF
+RUN: rm -f %t3.out.xref_dump.json
 RUN: %link %linkopts %t1.1.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigSymbolDetailsDwarfSourceRoot.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_dump.txt %s --check-prefix=DUMP-DWARF-ROOT
-RUN: rm -f xref_dump.txt
+RUN: %filecheck <%t3.out.xref_dump.json %s --check-prefix=DUMP-DWARF-ROOT
+RUN: rm -f %t3.out.xref_dump.json
 #END_TEST
 
 LINK-NOT: Error

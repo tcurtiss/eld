@@ -10,69 +10,70 @@ RUN: %clang %clangopts -c %p/Inputs/1.c -o %t1.o -ffunction-sections -fdata-sect
 RUN: %clang %clangopts -c %p/Inputs/2.c -o %t2.o -ffunction-sections -fdata-sections -fno-inline
 RUN: %clang %clangopts -emit-llvm -c %p/Inputs/2.c -o %t2.bc
 
-RUN: rm -f xref_robust.txt
+RUN: rm -f %tbitcode.out.xref_robust.json
 RUN: %link %linkopts %t1.o %t2.bc -e main -o %tbitcode.out --plugin-config %p/Inputs/PluginConfigText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=BITCODE
+RUN: %filecheck <%tbitcode.out.xref_robust.json %s --check-prefix=BITCODE
 
-RUN: rm -f xref_robust.txt
+RUN: rm -f %t1.out.xref_robust.json
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t1.out --plugin-config %p/Inputs/PluginConfigText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-TEXT
+RUN: %filecheck <%t1.out.xref_robust.json %s --check-prefix=DUMP-TEXT
 
-RUN: rm -f xref_robust.txt
+RUN: rm -f %t2.out.xref_robust.json
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t2.out --plugin-config %p/Inputs/PluginConfigIncludeExclude.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-INCLUDE-EXCLUDE
+RUN: %filecheck <%t2.out.xref_robust.json %s --check-prefix=DUMP-INCLUDE-EXCLUDE
 
-RUN: rm -f xref_robust.txt
+RUN: rm -f %t3.out.xref_robust.json
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t3.out --plugin-config %p/Inputs/PluginConfigMinRefs.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-MIN-REFS
+RUN: %filecheck <%t3.out.xref_robust.json %s --check-prefix=DUMP-MIN-REFS
 
-RUN: rm -f xref_robust.txt
+RUN: rm -f %t4.out.xref_robust.json
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t4.out --plugin-config %p/Inputs/PluginConfigCrossFile.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-CROSS-FILE
+RUN: %filecheck <%t4.out.xref_robust.json %s --check-prefix=DUMP-CROSS-FILE
 
-RUN: rm -f xref_robust.txt
+RUN: rm -f %t5.out.xref_robust.json
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t5.out --plugin-config %p/Inputs/PluginConfigExcludeFunctions.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-EXCLUDE-FUNCTIONS
+RUN: %filecheck <%t5.out.xref_robust.json %s --check-prefix=DUMP-EXCLUDE-FUNCTIONS
 
-RUN: rm -f xref_robust.txt
+RUN: rm -f %t6.out.xref_robust.json
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t6.out --plugin-config %p/Inputs/PluginConfigExcludeData.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_robust.txt %s --check-prefix=DUMP-EXCLUDE-DATA
+RUN: %filecheck <%t6.out.xref_robust.json %s --check-prefix=DUMP-EXCLUDE-DATA
 
-RUN: rm -f xref_robust.json
+RUN: rm -f %t8.out.xref_robust.json
 RUN: %link %linkopts --gc-sections %t1.o %t2.o -e main -o %t8.out --plugin-config %p/Inputs/PluginConfigJSONGC.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d=json.load(open('xref_robust.json')); ns=d['nodes']; ids={n['name']:n['id'] for n in ns}; print('JSON-GC', 'local_fn' in ids, 'unused' in ids, next(n.get('live', True) is False for n in ns if n['name']=='unused')); print('JSON-COUNT', any(ns[e['src']]['name']=='caller' and ns[e['dst']]['name']=='target' and e['count']==2 for e in d['edges']))" | %filecheck %s --check-prefix=JSON-GC
+RUN: %python -c "import json; d=json.load(open('%t8.out.xref_robust.json')); ns=d['nodes']; ids={n['name']:n['id'] for n in ns}; print('JSON-GC', 'local_fn' in ids, 'unused' in ids, next(n.get('live', True) is False for n in ns if n['name']=='unused')); print('JSON-COUNT', any(ns[e['src']]['name']=='caller' and ns[e['dst']]['name']=='target' and e['count']==2 for e in d['edges']))" | %filecheck %s --check-prefix=JSON-GC
 
-RUN: rm -f xref_robust_columnar.json
+RUN: rm -f %t9.out.xref_robust_columnar.json
 RUN: %link %linkopts --gc-sections %t1.o %t2.o -e main -o %t9.out --plugin-config %p/Inputs/PluginConfigColumnarGC.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d=json.load(open('xref_robust_columnar.json')); s=d['sections']; names=s['name']; print('COLUMNAR-SHAPE', len(s['size'])==s['count'], len(s['file'])==s['count'], len(d['refs']['offsets'])==s['count']+1); print('COLUMNAR-GC', 'local_fn' in names, any(n=='unused' and (f & 1) for n,f in zip(names,s['flags']))); print('COLUMNAR-COUNT', any(names[src]=='caller' and names[dst]=='target' and c==2 for src in range(s['count']) for j,c in enumerate(d['refs']['counts'][d['refs']['offsets'][src]:d['refs']['offsets'][src+1]]) for dst in [d['refs']['targets'][d['refs']['offsets'][src]+j]]))" | %filecheck %s --check-prefix=COLUMNAR
+RUN: %python -c "import json; d=json.load(open('%t9.out.xref_robust_columnar.json')); s=d['sections']; names=s['name']; print('COLUMNAR-SHAPE', len(s['size'])==s['count'], len(s['file'])==s['count'], len(d['refs']['offsets'])==s['count']+1); print('COLUMNAR-GC', 'local_fn' in names, any(n=='unused' and (f & 1) for n,f in zip(names,s['flags']))); print('COLUMNAR-COUNT', any(names[src]=='caller' and names[dst]=='target' and c==2 for src in range(s['count']) for j,c in enumerate(d['refs']['counts'][d['refs']['offsets'][src]:d['refs']['offsets'][src+1]]) for dst in [d['refs']['targets'][d['refs']['offsets'][src]+j]]))" | %filecheck %s --check-prefix=COLUMNAR
 
-RUN: rm -f xref_gzip.txt xref_gzip.txt.gz
+RUN: rm -f %t21.out.xref_gzip.json %t21.out.xref_gzip.json.gz
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t21.out --plugin-config %p/Inputs/PluginConfigGzipText.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import gzip,os; d=gzip.open('xref_gzip.txt.gz','rt').read(); print('GZIP-TEXT', d.startswith('# Symbols:'), os.path.exists('xref_gzip.txt.gz'), not os.path.exists('xref_gzip.txt'))" | %filecheck %s --check-prefix=GZIP-TEXT
+RUN: %python -c "import gzip,os; d=gzip.open('%t21.out.xref_gzip.json.gz','rt').read(); print('GZIP-TEXT', d.startswith('# Symbols:'), os.path.exists('%t21.out.xref_gzip.json.gz'), not os.path.exists('%t21.out.xref_gzip.json'))" | %filecheck %s --check-prefix=GZIP-TEXT
 
-RUN: rm -f xref_gzip.json xref_gzip.json.gz
+RUN: rm -f %t22.out.xref_gzip.json %t22.out.xref_gzip.json.gz
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t22.out --plugin-config %p/Inputs/PluginConfigGzipJSON.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import gzip,json,os; d=json.load(gzip.open('xref_gzip.json.gz','rt')); print('GZIP-JSON', bool(d['nodes']), os.path.exists('xref_gzip.json.gz'), not os.path.exists('xref_gzip.json'))" | %filecheck %s --check-prefix=GZIP-JSON
+RUN: %python -c "import gzip,json,os; d=json.load(gzip.open('%t22.out.xref_gzip.json.gz','rt')); print('GZIP-JSON', bool(d['nodes']), os.path.exists('%t22.out.xref_gzip.json.gz'), not os.path.exists('%t22.out.xref_gzip.json'))" | %filecheck %s --check-prefix=GZIP-JSON
 
-RUN: rm -f xref_gzip_columnar.json xref_gzip_columnar.json.gz
+RUN: rm -f %t23.out.xref_gzip_columnar.json %t23.out.xref_gzip_columnar.json.gz
 RUN: %link %linkopts %t1.o %t2.o -e main -o %t23.out --plugin-config %p/Inputs/PluginConfigGzipColumnar.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import gzip,json,os; d=json.load(gzip.open('xref_gzip_columnar.json.gz','rt')); print('GZIP-COLUMNAR', d['format']=='fia-columnar', os.path.exists('xref_gzip_columnar.json.gz'), not os.path.exists('xref_gzip_columnar.json'))" | %filecheck %s --check-prefix=GZIP-COLUMNAR
+RUN: %python -c "import gzip,json,os; d=json.load(gzip.open('%t23.out.xref_gzip_columnar.json.gz','rt')); print('GZIP-COLUMNAR', d['format']=='fia-columnar', os.path.exists('%t23.out.xref_gzip_columnar.json.gz'), not os.path.exists('%t23.out.xref_gzip_columnar.json'))" | %filecheck %s --check-prefix=GZIP-COLUMNAR
 
-RUN: rm -f xref_keep.json
+RUN: rm -f %t10.out.xref_keep.json
 RUN: %link %linkopts --gc-sections %t1.o %t2.o -T %p/Inputs/keep.t -e main -o %t10.out --plugin-config %p/Inputs/PluginConfigJSONKeep.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d=json.load(open('xref_keep.json')); ns={n['name']:n for n in d['nodes']}; print('KEEP-ROOT', ns['kept'].get('root', False), ns['unused'].get('live', True) is False)" | %filecheck %s --check-prefix=KEEP
+RUN: %python -c "import json; d=json.load(open('%t10.out.xref_keep.json')); ns={n['name']:n for n in d['nodes']}; print('KEEP-ROOT', ns['kept'].get('root', False), ns['unused'].get('live', True) is False)" | %filecheck %s --check-prefix=KEEP
 
-RUN: rm -f xref_path.json
+RUN: rm -f %tpath.out.xref_path.json
 RUN: %link %linkopts %t1.o %t2.o -e main -o %tpath.out --plugin-config %p/Inputs/PluginConfigSourceRootNoMatch.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %python -c "import json; d=json.load(open('xref_path.json')); print('SOURCE-ROOT-BOUNDARY', all(n['path'].startswith('/') for n in d['nodes']))" | %filecheck %s --check-prefix=PATH
+RUN: %python -c "import json; d=json.load(open('%tpath.out.xref_path.json')); print('SOURCE-ROOT-BOUNDARY', all(n['path'].startswith('/') for n in d['nodes']))" | %filecheck %s --check-prefix=PATH
 
 RUN: %clang %clangopts -c %p/Inputs/no_references.c -o %tnoref.o -ffunction-sections
-RUN: echo stale > xref_norefs.txt
+RUN: echo stale > %t11.out.xref_norefs.json
 RUN: %link %linkopts %tnoref.o -e main -o %t11.out --plugin-config %p/Inputs/PluginConfigNoRefs.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
-RUN: %filecheck <xref_norefs.txt %s --check-prefix=NO-REFS
+RUN: %filecheck <%t11.out.xref_norefs.json %s --check-prefix=NO-REFS
 
-RUN: %not %link %linkopts %t1.o -e main -o %t12.out --plugin-config %p/Inputs/PluginConfigNoFile.yaml 2>&1 | %filecheck %s --check-prefix=NO-FILE
-RUN: %not %link %linkopts %t1.o -e main -o %t13.out --plugin-config %p/Inputs/PluginConfigDuplicateFile.yaml 2>&1 | %filecheck %s --check-prefix=DUPLICATE-FILE
+RUN: %link %linkopts %t1.o %t2.o -e main -o %t12.out --plugin-config %p/Inputs/PluginConfigDefaultSuffix.yaml 2>&1 | %filecheck %s --check-prefix=LINK --allow-empty
+RUN: %filecheck <%t12.out.crossref.json %s --check-prefix=DUMP-TEXT
+RUN: %not %link %linkopts %t1.o -e main -o %t13.out --plugin-config %p/Inputs/PluginConfigDuplicateSuffix.yaml 2>&1 | %filecheck %s --check-prefix=DUPLICATE-SUFFIX
 RUN: %not %link %linkopts %t1.o -e main -o %t14.out --plugin-config %p/Inputs/PluginConfigMalformedToken.yaml 2>&1 | %filecheck %s --check-prefix=MALFORMED-TOKEN
 RUN: %not %link %linkopts %t1.o -e main -o %t15.out --plugin-config %p/Inputs/PluginConfigUnknownOption.yaml 2>&1 | %filecheck %s --check-prefix=UNKNOWN-OPTION
 RUN: %not %link %linkopts %t1.o -e main -o %t16.out --plugin-config %p/Inputs/PluginConfigInvalidYesNo.yaml 2>&1 | %filecheck %s --check-prefix=INVALID-YESNO
@@ -80,8 +81,10 @@ RUN: %not %link %linkopts %t1.o -e main -o %t17.out --plugin-config %p/Inputs/Pl
 RUN: %not %link %linkopts %t1.o -e main -o %t18.out --plugin-config %p/Inputs/PluginConfigConflictingPaths.yaml 2>&1 | %filecheck %s --check-prefix=CONFLICTING-PATHS
 RUN: %not %link %linkopts %t1.o -e main -o %t19.out --plugin-config %p/Inputs/PluginConfigInvalidStripGlob.yaml 2>&1 | %filecheck %s --check-prefix=INVALID-STRIP
 RUN: %not %link %linkopts %t1.o -e main -o %t24.out --plugin-config %p/Inputs/PluginConfigInvalidGzip.yaml 2>&1 | %filecheck %s --check-prefix=INVALID-GZIP
+RUN: mkdir -p %t20.out.xref_output_failure.json
 RUN: %not %link %linkopts %t1.o %t2.o -e main -o %t20.out --plugin-config %p/Inputs/PluginConfigOutputFailure.yaml 2>&1 | %filecheck %s --check-prefix=OUTPUT-FAILURE
-RUN: rm -f xref_robust.txt xref_robust.json xref_robust_columnar.json xref_keep.json xref_path.json xref_norefs.txt xref_gzip.txt xref_gzip.txt.gz xref_gzip.json xref_gzip.json.gz xref_gzip_columnar.json xref_gzip_columnar.json.gz
+RUN: rmdir %t20.out.xref_output_failure.json
+RUN: rm -f %t6.out.xref_robust.json %t8.out.xref_robust.json %t9.out.xref_robust_columnar.json %t10.out.xref_keep.json %tpath.out.xref_path.json %t11.out.xref_norefs.json %t21.out.xref_gzip.json %t21.out.xref_gzip.json.gz %t22.out.xref_gzip.json %t22.out.xref_gzip.json.gz %t23.out.xref_gzip_columnar.json %t23.out.xref_gzip_columnar.json.gz
 #END_TEST
 
 LINK-NOT: Error
@@ -144,8 +147,7 @@ NO-REFS: # Edges: <src-id>{{[[:space:]]}}<dst-id>{{[[:space:]]}}<count>{{[[:spac
 NO-REFS-NOT: stale
 NO-REFS-NOT: {{^[0-9-]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+}}
 
-NO-FILE: CrossReference requires a 'file=<path>' option
-DUPLICATE-FILE: CrossReference was given more than one 'file' option
+DUPLICATE-SUFFIX: CrossReference was given more than one 'output_suffix' option
 MALFORMED-TOKEN: CrossReference does not recognize option 'show_gc': options must be in key=value form
 UNKNOWN-OPTION: CrossReference does not recognize option 'not_an_option'
 INVALID-YESNO: CrossReference's show_gc option must be 'yes' or 'no'
@@ -153,4 +155,4 @@ INVALID-NUMBER: CrossReference's min_refs option must be a non-negative integer
 CONFLICTING-PATHS: CrossReference options 'source_root' and 'strip_prefix' are mutually exclusive
 INVALID-STRIP: CrossReference could not parse strip_prefix glob pattern '[unterminated'
 INVALID-GZIP: CrossReference's gzip option must be 'yes' or 'no', got 'maybe'
-OUTPUT-FAILURE: CrossReference could not open dump file '/definitely/missing/crossreference/output/xref.txt' for writing
+OUTPUT-FAILURE: CrossReference could not open dump file '{{.*}}20.out.xref_output_failure.json' for writing

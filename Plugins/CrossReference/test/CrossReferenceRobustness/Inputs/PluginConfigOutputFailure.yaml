@@ -2,4 +2,4 @@ GlobalPlugins:
   - Type: LinkerPlugin
     Name: CrossReference
     Library: CrossReference
-    Options: file=/definitely/missing/crossreference/output/xref.txt
+    Options: output_suffix=xref_output_failure
