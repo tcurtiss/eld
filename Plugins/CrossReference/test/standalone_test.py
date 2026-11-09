@@ -32,8 +32,8 @@ def argument_list(value):
     return arguments
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def argument_parser(description=None):
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--plugin-dir", required=True)
     parser.add_argument("--tools-dir", required=True)
     parser.add_argument("--library-dir", default="")
@@ -46,8 +46,10 @@ def main():
     parser.add_argument("--target-ld-args", type=argument_list, default=[])
     parser.add_argument("--target-cxx-arg", action="append", default=[])
     parser.add_argument("--target-ld-arg", action="append", default=[])
-    args = parser.parse_args()
+    return parser
 
+
+def runtime_environment(args):
     plugin_dir = Path(args.plugin_dir).resolve()
     tools_dir = Path(args.tools_dir).resolve()
     env = os.environ.copy()
@@ -59,6 +61,12 @@ def main():
                     args.library_dir or str(tools_dir / "lib"),
                     env.get(runtime_var, "")]
     env[runtime_var] = os.pathsep.join(path for path in runtime_dirs if path)
+    return env
+
+
+def main():
+    args = argument_parser().parse_args()
+    env = runtime_environment(args)
 
     with tempfile.TemporaryDirectory(prefix="eld-crossreference-") as temp:
         work = Path(temp)

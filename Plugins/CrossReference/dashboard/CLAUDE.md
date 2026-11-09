@@ -2,12 +2,20 @@
 
 Guidance for working on this repository with Claude Code. Read README.md first for what the dashboard does; this file covers how it is built, the decisions behind it, and what is next.
 
+The canonical development location is `Plugins/CrossReference/dashboard/` in
+the ELD repository. The exporter is `../CrossReference.cpp`; commit producer,
+schema and consumer changes together. This directory was imported from the
+standalone `image_analysis` repository at `eec6d70` using Git subtree.
+The exporter/consumer check is `../test/dashboard_test.py`, driven through
+`tools/check-export.js`. See `../README.md` for CMake commands. No submodule,
+npm packages, browser launch or screenshot capture is required for those checks.
+
 ## Context
 
 - The target is a monolithic C/C++ firmware image built with clang and linked with **ELD** (Qualcomm's embedded linker, which has a C++ plugin API). The system is **RAM-only** (no ROM), several hundred MiB, with a few hundred subsystems delineated by the source hierarchy. About 20% of the pre-link input is removed by `--gc-sections`.
 - The processor can store code and data **compressed in RAM**. Eligibility is decided by placing sections in specially named output sections. Exact compressed sizes are not known per section, so the dashboard uses one scale factor for code and one for data.
 - The audience for the dashboard is partly high-level: views lead with a one-sentence takeaway computed from the data, and avoid jargon in visible copy.
-- An ELD plugin will produce the export (see docs/export-format.md, including where each field comes from). It does not exist yet; everything so far is developed against synthetic data.
+- The CrossReference plugin beside this dashboard produces object and columnar JSON, optionally gzipped, with ELF/DWARF symbol and initializer details. Address/alignment and region-start export support remains a producer follow-up. The dashboard is developed against synthetic data and real exports; see docs/export-format.md for the shared schema.
 
 ## Commands
 
@@ -15,13 +23,22 @@ Guidance for working on this repository with Claude Code. Read README.md first f
 npm run build                      # src/* -> dist/image-anatomy.html
 npm run check                      # node tools/check.js: format equivalence, planted stories, build-system paths, layout (~5 s)
 npm run lint                       # optional ESLint check; run npm install once first
+cmake --build /path/to/build-plugins --target check-crossreference-dashboard
 node tools/check.js --sections 150000
 node tools/gen-sample.js --sections 60000 [--format objects] [--no-gzip] [--no-details] [--out FILE]
 node tools/build.js --d3 path/to/d3.min.js --out /tmp/x.html     # inline D3 for offline/headless use
 python3 tools/browser_smoke.py [--d3 path/to/d3.min.js] [--screenshots DIR]   # needs Python Playwright
 ```
 
-After changing `src/core.js`, run `npm run check`. After changing `src/ui.js`, `src/explorer.js` or `src/page.html`, rebuild and run the browser smoke test at 1440 px and 390 px, light and dark. Capture or review screenshots only when the user asks. Always rebuild `dist/` before committing; regenerate `samples/sample-20k.columnar.json.gz` (`node tools/gen-sample.js --sections 20000 --out samples/sample-20k.columnar.json.gz`) when the generator changes.
+After changing `src/core.js`, run `npm run check`. For exporter/schema changes,
+run the combined CMake check in a standalone build with `BUILD_TESTING=ON`.
+Use lightweight Node analysis and build checks by default. Run focused
+Playwright checks when actual browser behavior needs verification; use the
+full desktop/mobile, light/dark smoke suite for broad UI changes. Capture or
+review screenshots only when the user asks. Always rebuild `dist/` before
+committing; regenerate `samples/sample-20k.columnar.json.gz`
+(`node tools/gen-sample.js --sections 20000 --out samples/sample-20k.columnar.json.gz`)
+when the generator changes.
 
 ## Architecture
 
