@@ -30,10 +30,11 @@ cmake --build build-crossreference --target check-crossreference-dashboard
 
 The check target runs the dashboard's analysis and build checks. In a
 standalone build with `BUILD_TESTING=ON`, it also builds CrossReference and
-runs `ELDStandalone.CrossReferenceDashboard`: two small C files are compiled
+runs `ELDStandalone.CrossReferenceDashboard`: small C/C++ fixtures are compiled
 and linked with garbage collection, exported as gzipped object and columnar
 JSON with `symbol_details=none`, `elf`, and `dwarf`, then read by the actual
-JavaScript analyzer. This checks section kinds, discarded code, source
+JavaScript analyzer. This checks ELF addresses and alignment, memory regions, root flags, C++
+scopes, compression/title metadata, section kinds, discarded code, source
 ownership, initializer attachment, cross-subsystem relationships, format
 equivalence, and unchanged byte/reference accounting.
 
@@ -46,6 +47,11 @@ building the plugin:
 ctest --test-dir build-crossreference --output-on-failure \
   -R '^ELDStandalone.CrossReferenceDashboard$'
 ```
+
+In-tree builds also run the real fixture through the new ELD metadata APIs
+when Python and host Clang are available. This verifies evaluated `MEMORY`
+expressions and script/CLI entry selection. Standalone tests against the older
+SDK exercise the explicit region and root options instead.
 
 Inside `dashboard/`, `npm run build` updates the committed HTML and
 `npm run check` runs the lightweight JavaScript checks. Playwright checks
@@ -541,3 +547,46 @@ const data, 4 relocatable const data, 5 read/write data, and 6 zero-init data.
 A target with `ownerCount > 1` is shared; consumers must retain its physical
 bytes only once. This option requires JSON output and
 `symbol_details=elf` or `symbol_details=dwarf`.
+
+## Dashboard placement and build metadata
+
+Both JSON formats export final input-section `addr` and byte `align`, along
+with the existing sizes and reference graph. Addresses come from final chunks
+in output rules after layout and relaxation. Eliminated, empty, merged or
+noncontiguous sections without one reliable extent use `addr=-1`. Values
+outside JavaScript's safe-integer range are rejected before writing an export.
+
+With `cpp_demangle=yes`, columnar exports intern enclosing namespace/class
+chains in `strings.scopes` and reference them through `sections.scope`, while
+`sections.name` holds the leaf spelling. Object exports carry the full name
+and equivalent `class`. Template arguments, function parameters and operator
+names remain intact. The columnar schema version stays **1**.
+
+ELD plugin API **4.1** (built from this source) automatically exports evaluated named `MEMORY`
+regions and marks the resolved entry and explicitly requested undefined or
+export-dynamic symbols as roots, as well as sections matched by `KEEP`.
+The older installed SDK still builds; supply `region` and `root_symbols` when
+its API cannot report regions or entry/explicit symbol roots. Root annotations
+never keep a section alive or override linker garbage collection.
+
+The following optional colon-delimited settings apply to either JSON format:
+
+| Option | Meaning |
+|---|---|
+| `title=<text>` | Image/build label. Omitted by default. As with all options, text cannot contain a colon. |
+| `region=<name>,<start>,<size>` | Repeatable region metadata using non-negative decimal byte values. Names must be unique; explicit metadata overrides an automatic region with the same name. |
+| `root_symbols=<glob>,...` | Additional root annotations, matched against raw ELF symbol names. Use this for known vector/startup symbols or the older SDK's entry symbol. |
+| `compression_patterns=<patterns>` | Dashboard compression eligibility globs. |
+| `compression_code_ratio=<number>` | Estimated stored/raw code ratio, finite and between 0 and 1. |
+| `compression_data_ratio=<number>` | Estimated stored/raw data ratio, finite and between 0 and 1. |
+| `compression_buffer_bytes=<bytes>` | Fixed decompressor RAM overhead, a safe non-negative decimal integer. |
+
+Compression metadata is omitted unless configured; only specified fields are
+written. These are build estimates, not measured compressed sizes. The
+consumer supplies its existing defaults for omitted fields.
+
+For example, a columnar export configured for an older SDK might use:
+
+```text
+file=image.json:format=json_columnar:gzip=yes:cpp_demangle=yes:title=firmware r123:region=RAM,2147483648,536870912:root_symbols=Reset_Handler,vector_table:compression_patterns=.text.z,.data.z:compression_code_ratio=0.3:compression_data_ratio=0.5:compression_buffer_bytes=4096
+```

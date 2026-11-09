@@ -20,6 +20,9 @@
 #include <unordered_map>
 #include <vector>
 
+// Evaluated image metadata is available after final layout.
+#define ELD_PLUGIN_HAS_IMAGE_METADATA 1
+
 #define ELDEXP_REPORT_AND_RETURN_VOID_IF_ERROR(LW, eldExp)                     \
   if (!eldExp) {                                                               \
     (LW)->reportDiagEntry(std::move(eldExp.error()));                          \
@@ -68,6 +71,12 @@ struct DLL_A_EXPORT Section;
 struct DLL_A_EXPORT Segment;
 struct DLL_A_EXPORT SmallJSONValue;
 struct DLL_A_EXPORT Symbol;
+
+struct ImageMemoryRegion {
+  std::string Name;
+  uint64_t Start;
+  uint64_t Size;
+};
 struct DLL_A_EXPORT Use;
 class DLL_A_EXPORT TarWriter;
 
@@ -153,6 +162,19 @@ public:
   /// \note This function's result is valid for the link states
   /// \em BeforeLayout and beyond.
   eld::Expected<Symbol> getSymbol(const std::string &Sym) const;
+
+  /// Resolved CLI, script or target-default entry symbol; empty if unavailable.
+  /// Valid after layout. Numeric entry addresses have no symbol.
+  Symbol getEntrySymbol() const;
+
+  /// Entry and explicitly requested undefined/export-dynamic symbols.
+  /// This is not the complete GC root set; KEEP and retained sections may
+  /// have no symbol. Valid after layout.
+  std::vector<Symbol> getExplicitRootSymbols() const;
+
+  /// Named MEMORY regions with evaluated origins and lengths. Empty when
+  /// no MEMORY command is present. Valid after layout.
+  eld::Expected<std::vector<ImageMemoryRegion>> getImageMemoryRegions() const;
 
   /// Adds a plugin generated file to the reproduce tar ball.
   ///

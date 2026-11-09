@@ -11,9 +11,9 @@ RUN: %clang %clangopts -o %t1.1.o %p/Inputs/1.c -c
 RUN: not %link %linkopts --plugin-config %p/Inputs/PluginConfigNoVersion.yaml %t1.1.o --trace=plugin -o %t.out 2>&1 | %filecheck --check-prefix=NO_VERSION %s
 NO_VERSION: Plugin {{.*}} in library {{.*}} does not export getPluginAPIVersion function
 
-RUN: env ELD_TEST_LINKER_PLUGIN_VERSION_MAJOR=4 ELD_TEST_LINKER_PLUGIN_VERSION_MINOR=0 \
+RUN: env ELD_TEST_LINKER_PLUGIN_VERSION_MAJOR=4 ELD_TEST_LINKER_PLUGIN_VERSION_MINOR=1 \
 RUN:   %link %linkopts --plugin-config %p/Inputs/PluginConfig.yaml %t1.1.o --trace=plugin -o %t.out 2>&1 | %filecheck --check-prefix=CURRENT %s
-CURRENT: Plugin version 4.0 in library
+CURRENT: Plugin version 4.1 in library
 CURRENT: Calling LinkerPluginVersion::Init plugin hook
 
 RUN: env ELD_TEST_LINKER_PLUGIN_VERSION_MAJOR=4 ELD_TEST_LINKER_PLUGIN_VERSION_MINOR=0 \

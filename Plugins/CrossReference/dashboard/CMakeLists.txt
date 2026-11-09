@@ -49,17 +49,50 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/${_check}.js")
   endforeach()
   if(ELD_STANDALONE AND TARGET CrossReference)
+    set(_metadata_args)
+    file(STRINGS "${ELD_INCLUDE_DIR}/LinkerWrapper.h" _metadata_api
+      REGEX "^#define ELD_PLUGIN_HAS_IMAGE_METADATA +1")
+    if(_metadata_api)
+      list(APPEND _metadata_args --automatic-metadata)
+    endif()
     eld_add_standalone_test(
       NAME CrossReferenceDashboard TARGET CrossReference
       SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/../test/dashboard_test.py"
       ARGS --node "${CROSSREFERENCE_DASHBOARD_NODE}"
-        --output-dir "${CMAKE_CURRENT_BINARY_DIR}/exports")
+        --output-dir "${CMAKE_CURRENT_BINARY_DIR}/exports" ${_metadata_args})
     add_dependencies(check-crossreference-dashboard CrossReference)
     add_custom_command(TARGET check-crossreference-dashboard POST_BUILD
       COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${CMAKE_BINARY_DIR}"
         -C "$<CONFIG>" --output-on-failure
         -R "^ELDStandalone.CrossReferenceDashboard$"
       USES_TERMINAL VERBATIM)
+  endif()
+endif()
+
+# The in-tree producer uses the new evaluated metadata APIs. The installed
+# SDK fixture above also verifies the explicit region/root fallback.
+if(NOT ELD_STANDALONE AND TARGET CrossReference AND TARGET ld.eld)
+  find_package(Python3 QUIET COMPONENTS Interpreter)
+  find_program(CROSSREFERENCE_DASHBOARD_CXX NAMES clang++)
+  find_program(CROSSREFERENCE_DASHBOARD_CC NAMES clang)
+  if(Python3_Interpreter_FOUND AND CROSSREFERENCE_DASHBOARD_CXX
+      AND CROSSREFERENCE_DASHBOARD_CC)
+    add_custom_target(CrossReferenceDashboardExportCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../test/dashboard_test.py"
+        --node "${CROSSREFERENCE_DASHBOARD_NODE}"
+        --output-dir "${CMAKE_CURRENT_BINARY_DIR}/exports"
+        --plugin-dir "$<TARGET_FILE_DIR:CrossReference>"
+        --tools-dir "${LLVM_BINARY_DIR}"
+        --library-dir "$<TARGET_FILE_DIR:LW>"
+        --runtime-dir "$<TARGET_FILE_DIR:LW>"
+        --target-cc "${CROSSREFERENCE_DASHBOARD_CC}"
+        --target-cxx "${CROSSREFERENCE_DASHBOARD_CXX}"
+        --target-ld "$<TARGET_FILE:ld.eld>"
+        --target-triple "${ELD_DEFAULT_TARGET_TRIPLE}"
+        --automatic-metadata
+      DEPENDS CrossReference ld.eld
+      USES_TERMINAL VERBATIM)
+    add_dependencies(check-crossreference-dashboard CrossReferenceDashboardExportCheck)
   endif()
 endif()
 message(STATUS "CrossReference dashboard: ${_dashboard_html}")
