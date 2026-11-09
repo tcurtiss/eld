@@ -172,6 +172,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <deque>
 #include <fstream>
@@ -223,6 +224,10 @@ struct DashboardSection {
   uint32_t PathID = 0;
   std::string Name;
   std::string InputName;
+  std::vector<std::string> Scope;
+  int64_t Address = -1;
+  bool AddressOverflow = false;
+  uint64_t Alignment = 0;
   uint32_t OutputID = UINT32_MAX;
   uint64_t Size = 0;
   uint8_t Kind = 0;
@@ -392,6 +397,64 @@ public:
           return;
         }
         DumpPath = Value;
+        continue;
+      }
+      if (Key == "title") {
+        Title = Value;
+        continue;
+      }
+      if (Key == "root_symbols") {
+        if (!parseGlobList(Value, RootSymbolPatterns))
+          return;
+        continue;
+      }
+      if (Key == "region") {
+        // Repeatable fallback for SDKs without evaluated MEMORY access.
+        size_t First = Value.find(','), Last = Value.rfind(',');
+        uint64_t Start = 0, Size = 0;
+        if (First == std::string::npos || First == 0 || First == Last ||
+            !parseDashboardInteger(Value.substr(First + 1, Last - First - 1),
+                                 Start) ||
+            !parseDashboardInteger(Value.substr(Last + 1), Size) ||
+            Start > MaxJSONInteger || Size > MaxJSONInteger - Start ||
+            !Regions.emplace(Value.substr(0, First), MemoryRegion{Start, Size})
+                 .second) {
+          optionError("region requires a unique name,start,size with safe "
+                      "non-negative decimal integers",
+                      Value);
+          return;
+        }
+        continue;
+      }
+      if (Key == "compression_patterns") {
+        CompressionPatterns = Value;
+        continue;
+      }
+      if (Key == "compression_code_ratio" || Key == "compression_data_ratio") {
+        double Ratio = 0;
+        std::istringstream Number(Value);
+        Number.imbue(std::locale::classic());
+        Number >> std::noskipws >> Ratio;
+        if (!Number || !Number.eof() || !std::isfinite(Ratio) || Ratio < 0 ||
+            Ratio > 1) {
+          optionError(
+              "compression ratios must be finite numbers between 0 and 1",
+              Value);
+          return;
+        }
+        (Key == "compression_code_ratio" ? CompressionCodeRatio
+                                         : CompressionDataRatio) = Ratio;
+        continue;
+      }
+      if (Key == "compression_buffer_bytes") {
+        uint64_t Bytes = 0;
+        if (!parseDashboardInteger(Value, Bytes) || Bytes > MaxJSONInteger) {
+          optionError("compression_buffer_bytes requires a safe non-negative "
+                      "decimal integer",
+                      Value);
+          return;
+        }
+        CompressionBufferBytes = Bytes;
         continue;
       }
       if (Key == "format") {
@@ -653,6 +716,9 @@ public:
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference buildDashboardSections", "CrossReference",
           getLinker()->isTimingEnabled()));
+      buildDashboardMetadata();
+      if (HasError)
+        return;
       buildDashboardSections();
     }
     if (CoalesceDirs) {
@@ -691,6 +757,8 @@ public:
       AutoTimer Timer(getLinker()->CreateTimer(
           "CrossReference writeDump", "CrossReference",
           getLinker()->isTimingEnabled()));
+      if (Format != OutputFormat::Text && !validateDashboardNumbers())
+        return;
       writeDump();
     }
   }
@@ -980,6 +1048,159 @@ private:
     return Name.empty() ? "<unknown>" : Name;
   }
 
+  static constexpr uint64_t MaxJSONInteger = (uint64_t(1) << 53) - 1;
+  struct MemoryRegion {
+    uint64_t Start;
+    uint64_t Size;
+  };
+
+  static bool parseDashboardInteger(const std::string &Value, uint64_t &Out) {
+    return !Value.empty() &&
+           Value.find_first_not_of("0123456789") == std::string::npos &&
+           parseNonNegativeInt(Value, Out);
+  }
+
+  void optionError(const std::string &Message, const std::string &Value) {
+    HasError = true;
+    getLinker()->reportDiag(
+        getLinker()->getErrorDiagID("CrossReference: %0, got '%1'"), Message,
+        Value);
+  }
+
+  // Only split enclosing scopes. Colons inside template arguments, function
+  // parameters and operator/conversion names belong to the leaf spelling.
+  static std::vector<std::string> splitDashboardScope(const std::string &Name) {
+    std::vector<std::string> Parts;
+    int Angle = 0;
+    size_t Begin = 0;
+    for (size_t I = 0; I < Name.size(); ++I) {
+      // This spelling is an enclosing scope, not a parameter list.
+      if (Angle == 0 && Name.compare(I, 21, "(anonymous namespace)") == 0) {
+        I += 20;
+        continue;
+      }
+      if (Angle == 0 &&
+          (Name[I] == '(' ||
+           (Name.compare(I, 8, "operator") == 0 &&
+            (I + 8 == Name.size() ||
+             (!std::isalnum(static_cast<unsigned char>(Name[I + 8])) &&
+              Name[I + 8] != '_')))))
+        break;
+      if (Name[I] == '<')
+        ++Angle;
+      else if (Name[I] == '>' && Angle > 0)
+        --Angle;
+      else if (Angle == 0 && Name[I] == ':' && I + 1 < Name.size() &&
+               Name[I + 1] == ':') {
+        Parts.push_back(Name.substr(Begin, I - Begin));
+        Begin = ++I + 1;
+      }
+    }
+    return Parts;
+  }
+
+  void buildDashboardMetadata() {
+    if (Format == OutputFormat::Text)
+      return;
+    RootSections.clear();
+    auto AddRoot = [&](const Symbol &Sym) {
+      if (Sym && !Sym.isUndef() && Sym.getChunk())
+        RootSections.insert(Sym.getChunk().getSection());
+    };
+#ifdef ELD_PLUGIN_HAS_IMAGE_METADATA
+    for (const Symbol &Sym : getLinker()->getExplicitRootSymbols())
+      AddRoot(Sym);
+    auto Evaluated = getLinker()->getImageMemoryRegions();
+    if (!Evaluated) {
+      HasError = true;
+      getLinker()->reportDiagEntry(std::move(Evaluated.error()));
+      return;
+    }
+    for (const auto &R : Evaluated.value()) {
+      if (R.Start > MaxJSONInteger || R.Size > MaxJSONInteger - R.Start) {
+        optionError("MEMORY region exceeds the JSON safe-integer range",
+                    R.Name);
+        return;
+      }
+      // Explicit regions override the same named linker region.
+      Regions.emplace(R.Name, MemoryRegion{R.Start, R.Size});
+    }
+#endif
+    for (const Symbol &Sym : AllSymbols)
+      for (const auto &Pattern : RootSymbolPatterns)
+        if (Pattern.match(Sym.getName())) {
+          AddRoot(Sym);
+          break;
+        }
+  }
+
+  bool validateDashboardNumbers() {
+    auto Check = [&](uint64_t Value) {
+      if (Value <= MaxJSONInteger)
+        return true;
+      optionError("export value exceeds the JSON safe-integer range",
+                  std::to_string(Value));
+      return false;
+    };
+    for (const auto &S : DashboardSections) {
+      if (S.AddressOverflow) {
+        optionError("section placement exceeds the JSON safe-integer range",
+                    S.Name);
+        return false;
+      }
+      if (!Check(S.Size) || !Check(S.Alignment))
+        return false;
+    }
+    for (const auto &E : DashboardEdgeCounts)
+      if (!Check(E.second))
+        return false;
+    for (const auto &S : DashboardSymbols)
+      if (!Check(S.Handle.getOffsetInChunk()) || !Check(S.Handle.getSize()))
+        return false;
+    for (const auto &E : DetailedEdges)
+      if (!Check(E.second.Count))
+        return false;
+    for (const auto &F : FragmentRefs)
+      if (!Check(F.Count))
+        return false;
+    return true;
+  }
+
+  void writeDashboardMetadata(portable::JSONWriter &JSON) {
+    if (!Title.empty())
+      JSON.attribute("title", Title);
+    if (!Regions.empty())
+      JSON.attributeObject("regions", [&] {
+        for (const auto &R : Regions)
+          JSON.attributeObject(R.first.c_str(), [&] {
+            JSON.attribute("start", R.second.Start);
+            JSON.attribute("size", R.second.Size);
+          });
+      });
+    if (CompressionPatterns || CompressionCodeRatio || CompressionDataRatio ||
+        CompressionBufferBytes)
+      JSON.attributeObject("compression", [&] {
+        if (CompressionPatterns)
+          JSON.attribute("patterns", *CompressionPatterns);
+        if (CompressionCodeRatio)
+          JSON.attribute("codeRatio", *CompressionCodeRatio);
+        if (CompressionDataRatio)
+          JSON.attribute("dataRatio", *CompressionDataRatio);
+        if (CompressionBufferBytes)
+          JSON.attribute("decompressBufferBytes", *CompressionBufferBytes);
+      });
+  }
+
+  static std::string scopeName(const DashboardSection &S) {
+    std::string Name;
+    for (const auto &Part : S.Scope) {
+      if (!Name.empty())
+        Name += "::";
+      Name += Part;
+    }
+    return Name;
+  }
+
   void buildDashboardSectionsForInputFile(
       InputFile &IF, uint32_t PathID,
       std::vector<DashboardSection> &Sections) {
@@ -998,6 +1219,8 @@ private:
       auto Primary = PrimarySectionSymbols.find(S);
       if (Primary != PrimarySectionSymbols.end())
         DS.Name = symbolDisplayName(Primary->second);
+      if (CppDemangle)
+        DS.Scope = splitDashboardScope(DS.Name);
       std::string Output = S.getOutputSection().getName();
       if (!Output.empty()) {
         auto OutputIt = DashboardOutputIDs.find(Output);
@@ -1007,7 +1230,41 @@ private:
       DS.Size = S.getSize();
       DS.Kind = dashboardKind(S);
       DS.Live = !S.isGarbageCollected();
-      DS.Root = DS.Live && S.getLinkerScriptRule().isKeep();
+      DS.Root = DS.Live &&
+                (S.getLinkerScriptRule().isKeep() || RootSections.count(S));
+      DS.Alignment = S.getAlignment();
+      if (DS.Live && S.getOutputSection()) {
+        // getOffset() is an input-file offset, not a VMA offset. Use final
+        // chunk placement, and leave merged/noncontiguous sections unknown.
+        std::vector<std::pair<uint64_t, uint64_t>> Spans;
+        auto Chunks = DashboardChunks.find(S);
+        if (Chunks != DashboardChunks.end())
+          for (const Chunk &C : Chunks->second) {
+            if (C.getSize())
+              Spans.emplace_back(C.getAddress(), C.getSize());
+          }
+        std::sort(Spans.begin(), Spans.end());
+        if (!Spans.empty()) {
+          uint64_t Begin = Spans.front().first, End = Begin;
+          bool Contiguous = true;
+          for (const auto &Span : Spans) {
+            if (Span.first != End || Span.first > MaxJSONInteger ||
+                Span.second > MaxJSONInteger - Span.first) {
+              DS.AddressOverflow = Span.first > MaxJSONInteger ||
+                                   Span.second > MaxJSONInteger - Span.first;
+              Contiguous = false;
+              break;
+            }
+            End += Span.second;
+          }
+          if (Contiguous && End - Begin == DS.Size)
+            DS.Address = Begin;
+          else if (Begin > MaxJSONInteger) {
+            // Preserve the value for validation rather than rounding it.
+            DS.AddressOverflow = true;
+          }
+        }
+      }
       Sections.push_back(std::move(DS));
     }
   }
@@ -1037,6 +1294,9 @@ private:
       }
     }
 
+    // Layout moves fragments from input sections into output-rule lists.
+    // Index those lists once by original owner, before starting workers.
+    DashboardChunks.clear();
     DashboardSections.clear();
     DashboardSectionIds.clear();
     FragmentClasses.clear();
@@ -1046,7 +1306,11 @@ private:
     DashboardOutputIDs.clear();
     if (eld::Expected<std::vector<OutputSection>> OutputSections =
             getLinker()->getAllOutputSections()) {
-      for (const OutputSection &Output : OutputSections.value()) {
+      for (OutputSection &Output : OutputSections.value()) {
+        for (const auto &Rule : Output.getLinkerScriptRules())
+          for (const Chunk &C : Rule.getChunks())
+            if (C && C.getSection())
+              DashboardChunks[C.getSection()].push_back(C);
         std::string Name = Output.getName();
         if (Name.empty())
           continue;
@@ -2080,6 +2344,7 @@ private:
 
     portable::JSONWriter JSON(Out);
     JSON.object([&] {
+      writeDashboardMetadata(JSON);
       JSON.attributeArray("nodes", [&] {
         for (uint32_t ID = 0; ID < DashboardSections.size(); ++ID) {
           const DashboardSection &S = DashboardSections[ID];
@@ -2089,6 +2354,10 @@ private:
             JSON.attribute("path", dashboardPath(S.PathID));
             JSON.attribute("kind", dashboardKindToString(S.Kind));
             JSON.attribute("size", S.Size);
+            JSON.attribute("addr", S.Address);
+            JSON.attribute("align", S.Alignment);
+            if (!S.Scope.empty())
+              JSON.attribute("class", scopeName(S));
             if (!S.Live)
               JSON.attribute("live", false);
             if (S.Root)
@@ -2121,6 +2390,9 @@ private:
     std::vector<StringKey> Dirs;
     std::map<StringKey, int> FileIDs;
     std::vector<StringKey> Files;
+    std::map<StringKey, int> ScopeIDs;
+    std::vector<StringKey> Scopes;
+    std::vector<int> SectionScopes;
     std::map<std::string, int> OutIDs;
     std::vector<std::string> Outs;
 
@@ -2178,6 +2450,15 @@ private:
     SectionFiles.reserve(DashboardSections.size());
     SectionOuts.reserve(DashboardSections.size());
     for (const DashboardSection &S : DashboardSections) {
+      int Parent = -1;
+      for (const auto &Part : S.Scope) {
+        StringKey Key{Parent, Part};
+        auto Inserted = ScopeIDs.emplace(Key, Scopes.size());
+        if (Inserted.second)
+          Scopes.push_back(Key);
+        Parent = Inserted.first->second;
+      }
+      SectionScopes.push_back(Parent);
       SectionFiles.push_back(internPath(dashboardPath(S.PathID)));
       SectionOuts.push_back(S.OutputID == UINT32_MAX
                                 ? -1
@@ -2195,6 +2476,7 @@ private:
     JSON.object([&] {
       JSON.attribute("format", "fia-columnar");
       JSON.attribute("version", 1);
+      writeDashboardMetadata(JSON);
       JSON.attributeObject("strings", [&] {
         JSON.attributeArray("dirs", [&] {
           for (const StringKey &D : Dirs)
@@ -2208,6 +2490,13 @@ private:
             JSON.array([&] {
               JSON.value(F.first);
               JSON.value(F.second);
+            });
+        });
+        JSON.attributeArray("scopes", [&] {
+          for (const StringKey &S : Scopes)
+            JSON.array([&] {
+              JSON.value(S.first);
+              JSON.value(S.second);
             });
         });
         JSON.attributeArray("outs", [&] {
@@ -2247,9 +2536,26 @@ private:
             JSON.value(SectionFlags);
           });
         });
+        JSON.attributeArray("addr", [&] {
+          SectionValues([&](size_t, const DashboardSection &S) {
+            JSON.value(S.Address);
+          });
+        });
+        JSON.attributeArray("align", [&] {
+          SectionValues([&](size_t, const DashboardSection &S) {
+            JSON.value(S.Alignment);
+          });
+        });
+        JSON.attributeArray("scope", [&] {
+          SectionValues([&](size_t I, const DashboardSection &) {
+            JSON.value(SectionScopes[I]);
+          });
+        });
         JSON.attributeArray("name", [&] {
           SectionValues([&](size_t, const DashboardSection &S) {
-            JSON.value(S.Name);
+            const std::string Scope = scopeName(S);
+            JSON.value(Scope.empty() ? S.Name
+                                     : S.Name.substr(Scope.size() + 2));
           });
         });
       });
@@ -2344,6 +2650,13 @@ private:
   bool Gzip = false;
   bool CoalesceDirs = false;
   OutputFormat Format = OutputFormat::Text;
+  std::string Title;
+  std::map<std::string, MemoryRegion> Regions;
+  std::optional<std::string> CompressionPatterns;
+  std::optional<double> CompressionCodeRatio, CompressionDataRatio;
+  std::optional<uint64_t> CompressionBufferBytes;
+  std::vector<portable::GlobPattern> RootSymbolPatterns;
+  std::unordered_set<Section> RootSections;
   std::string SourceRoot;
   bool HasSourceRoot = false;
   bool HasStripPrefix = false;
@@ -2376,6 +2689,7 @@ private:
   std::vector<XRefEdge> Edges;
   std::vector<Symbol> AllSymbols;
   std::unordered_map<Symbol, uint32_t> SymbolIDs;
+  std::unordered_map<Section, std::vector<Chunk>> DashboardChunks;
   std::vector<DashboardSection> DashboardSections;
   std::vector<std::string> DashboardPaths;
   std::unordered_map<std::string, uint32_t> DashboardPathIDs;

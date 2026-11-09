@@ -15,7 +15,7 @@ npm packages, browser launch or screenshot capture is required for those checks.
 - The target is a monolithic C/C++ firmware image built with clang and linked with **ELD** (Qualcomm's embedded linker, which has a C++ plugin API). The system is **RAM-only** (no ROM), several hundred MiB, with a few hundred subsystems delineated by the source hierarchy. About 20% of the pre-link input is removed by `--gc-sections`.
 - The processor can store code and data **compressed in RAM**. Eligibility is decided by placing sections in specially named output sections. Exact compressed sizes are not known per section, so the dashboard uses one scale factor for code and one for data.
 - The audience for the dashboard is partly high-level: views lead with a one-sentence takeaway computed from the data, and avoid jargon in visible copy.
-- The CrossReference plugin beside this dashboard produces object and columnar JSON, optionally gzipped, with ELF/DWARF symbol and initializer details. Address/alignment and region-start export support remains a producer follow-up. The dashboard is developed against synthetic data and real exports; see docs/export-format.md for the shared schema.
+- The CrossReference plugin beside this dashboard produces object and columnar JSON, optionally gzipped, with ELF/DWARF symbol and initializer details. It also exports final addresses/alignment, C++ scopes and optional build metadata; current ELD APIs provide evaluated regions and explicit symbol roots, with explicit options for older SDKs. The dashboard is developed against synthetic data and real exports; see docs/export-format.md for the shared schema.
 
 ## Commands
 

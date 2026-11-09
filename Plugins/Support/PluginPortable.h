@@ -12,8 +12,11 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <limits>
+#include <locale>
 #include <optional>
 #include <ostream>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -285,6 +288,14 @@ private:
   void writeValue(const std::string &Value) { writeString(Value); }
   void writeValue(const char *Value) { writeString(Value); }
   void writeValue(bool Value) { Out_ << (Value ? "true" : "false"); }
+
+  void writeValue(double Value) {
+    std::ostringstream Number;
+    Number.imbue(std::locale::classic());
+    Number << std::setprecision(std::numeric_limits<double>::max_digits10)
+           << Value;
+    Out_ << Number.str();
+  }
 
   template <typename T,
             typename std::enable_if_t<std::is_integral<T>::value &&

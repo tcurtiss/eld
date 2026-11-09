@@ -15,6 +15,7 @@
 #include "eld/Input/ELFObjectFile.h"
 #include "eld/Object/ObjectLinker.h"
 #include "eld/Object/OutputSectionEntry.h"
+#include "eld/Object/ScriptMemoryRegion.h"
 #include "eld/Object/SectionMap.h"
 #include "eld/Plugin/PluginActivityLog.h"
 #include "eld/Plugin/PluginManager.h"
@@ -396,6 +397,44 @@ LinkerWrapper::getSymbol(const std::string &Sym) const {
     return std::make_unique<DiagnosticEntry>(
         DiagnosticEntry(Diag::error_symbol_not_found, {Sym}));
   return plugin::Symbol(Info);
+}
+
+plugin::Symbol LinkerWrapper::getEntrySymbol() const {
+  const LDSymbol *Entry = m_Module.getBackend().getEntrySymbol();
+  return plugin::Symbol(Entry ? m_Module.getNamePool().findInfo(Entry->name())
+                              : nullptr);
+}
+
+std::vector<plugin::Symbol> LinkerWrapper::getExplicitRootSymbols() const {
+  std::vector<plugin::Symbol> Roots;
+  if (auto Entry = getEntrySymbol())
+    Roots.push_back(Entry);
+  auto Add = [&](llvm::StringRef Name) {
+    auto *Info = m_Module.getNamePool().findInfo(Name.str());
+    if (Info && !Info->isUndef())
+      Roots.emplace_back(Info);
+  };
+  const auto &Options = m_Module.getConfig().options();
+  for (auto I = Options.undefSymBegin(), E = Options.undefSymEnd(); I != E; ++I)
+    Add((*I)->name());
+  for (const auto &S : Options.getExportDynSymList())
+    Add(S->name());
+  return Roots;
+}
+
+eld::Expected<std::vector<plugin::ImageMemoryRegion>>
+LinkerWrapper::getImageMemoryRegions() const {
+  std::vector<plugin::ImageMemoryRegion> Regions;
+  for (const auto *Region : m_Module.getLinkerScript().getMemoryRegions()) {
+    auto Origin = Region->getOrigin();
+    if (!Origin)
+      return std::move(Origin.error());
+    auto Length = Region->getLength();
+    if (!Length)
+      return std::move(Length.error());
+    Regions.push_back({Region->getName(), Origin.value(), Length.value()});
+  }
+  return Regions;
 }
 
 bool LinkerWrapper::matchPattern(const std::string &Pattern,

@@ -94,7 +94,7 @@ include(VersionFromLinkerGit)
 include(ELDColorMsg)
 
 set(LINKER_PLUGIN_API_MAJOR_VERSION "4")
-set(LINKER_PLUGIN_API_MINOR_VERSION "0")
+set(LINKER_PLUGIN_API_MINOR_VERSION "1")
 
 # Compute the ELD version from the LLVM version.
 string(REGEX MATCH "[0-9]+\\.[0-9]+(\\.[0-9]+)?" ELD_VERSION ${PACKAGE_VERSION})

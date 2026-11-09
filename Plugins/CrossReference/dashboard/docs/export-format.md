@@ -290,3 +290,26 @@ caches only the current reference query rather than a second full object graph.
 - **Roots**: the entry symbol, vector tables, and sections kept by `KEEP` in the linker script.
 - **Addresses and alignment**: each input section's output address and alignment, read after layout at the same point as final sizes. Region starts and sizes come from the linker script's `MEMORY` block.
 - **Hot**: not known to the linker. Add it from profiling or trace data if available, or from a list of hot functions.
+
+### Producer configuration and compatibility
+
+CrossReference now emits `sections.addr`, `sections.align`, `strings.scopes`
+and `sections.scope` in columnar version 1, and equivalent `addr`, `align`
+and `class` fields in object JSON. Scope export follows `cpp_demangle=yes`.
+Final addresses come from input-owned chunks retained in output rules;
+eliminated/empty sections and merged or noncontiguous extents without a
+reliable section start use `-1`.
+
+Current ELD exposes evaluated memory regions and the resolved entry and
+explicit undefined/export-dynamic symbol roots through its public plugin API.
+Exports mark these roots and `KEEP` sections only when live. On older SDKs,
+`region=name,start,size` and `root_symbols=glob,...` supply known metadata.
+Explicit regions override automatic entries with the same name.
+
+Optional `title`, `compression_patterns`, `compression_code_ratio`,
+`compression_data_ratio` and `compression_buffer_bytes` configure the common
+metadata fields. Unspecified title/compression values are omitted, leaving
+dashboard defaults intact. Ratios must be finite fractions in [0,1]; byte
+values and region ends must not exceed `Number.MAX_SAFE_INTEGER` (2^53-1).
+See the [plugin README](../../README.md#dashboard-placement-and-build-metadata)
+for the complete option syntax and examples.
