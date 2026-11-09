@@ -8,6 +8,7 @@
 #include "OutputSectionIteratorPlugin.h"
 #include "PluginVersion.h"
 #include "PointerReloc.h"
+#include <iostream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -21,6 +22,17 @@ public:
   void Init(std::string Options) override { Mode = Options; }
   void processOutputSection(OutputSection) override {}
   Status Run(bool) override {
+    if (getLinker()->isLinkStateCreatingSegments() &&
+        (Mode == "do-relocation" || Mode == "apply-relocations")) {
+      // A failed result must diagnose the link even when it is not reported.
+      std::vector<uint8_t> Buffer(65536);
+      auto Result = Mode == "do-relocation"
+                        ? getLinker()->doRelocation()
+                        : getLinker()->applyRelocations(Buffer.data());
+      if (!Result)
+        std::cerr << "buffer API rejected\n";
+      return Status::SUCCESS;
+    }
     if (!getLinker()->isLinkStateAfterLayout())
       return Status::SUCCESS;
     for (Use U : Uses) {

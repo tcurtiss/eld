@@ -57,6 +57,8 @@ late claims, duplicate claims (including a second claim by the same plugin),
 and claims for uses with an existing replacement from `setTargetDataForUse`
 are rejected.
 Check each API result and report errors through the plugin diagnostic framework.
+Uses created with `createAndAddUse` in plugin-created PROGBITS chunks are
+supported under the same rules; their replacement bytes are emitted too.
 
 For each claimed use that survives into the output, the owning plugin must
 supply final bytes with `setTargetDataForUse` before relocation application.
@@ -74,6 +76,17 @@ replacement writes when validation/application begins; later setter calls
 fail rather than accepting data that cannot affect the output. Missing data
 and NOLOAD/NOBITS output storage are diagnosed for surviving claims before
 relocation application; discarded claims do not require replacement data.
+
+Early block consumption is not supported for claimed source sections.
+ELD rejects file-size or memory-size plugins consuming an output section that
+contains a surviving claim before final relocation application. This also
+applies when replacement bytes have already been supplied: the owner could
+still update them during `AfterLayout`, after a consumer has compressed or
+checksummed the earlier bytes. Unrelated output sections remain usable by these
+plugins. The buffer APIs `doRelocation` and `applyRelocations` operate globally
+and reject any surviving claims before final relocation validation. These
+checks diagnose the unsupported combination without closing the normal
+`AfterLayout` write window. Discarded claims do not block early consumption.
 
 ELD skips normal target scanning and application for claimed uses. Those uses
 do not reserve GOT/PLT entries or dynamic relocations and are omitted from

@@ -547,6 +547,10 @@ public:
                                       const plugin::LinkerWrapper *);
   void closePluginRelocationClaims();
   bool validatePluginRelocations();
+  // Reject early block consumption without closing AfterLayout writes.
+  // A null OutputSection checks all surviving claims (the public buffer APIs).
+  bool validatePluginRelocationConsumption(
+      const ELFSection *OutputSection = nullptr);
 
   void addReferencedSymbol(Section &, ResolveInfo &);
 

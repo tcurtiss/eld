@@ -902,6 +902,31 @@ void Module::closePluginRelocationClaims() {
   PluginRelocationClaimsClosed = true;
 }
 
+bool Module::validatePluginRelocationConsumption(
+    const ELFSection *OutputSection) {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  if (PluginRelocationDataClosed)
+    return true;
+  for (const auto &Entry : RelocationData) {
+    const Relocation *R = Entry.first;
+    if (!R->isPluginOwned())
+      continue;
+    const ELFSection *S = R->targetRef()->frag()->getOwningSection();
+    if (S->isIgnore() || S->isDiscard() ||
+        (S->getOutputSection() && S->getOutputSection()->isDiscard()))
+      continue;
+    if (OutputSection && R->targetRef()->getOutputELFSection() != OutputSection)
+      continue;
+    // Even supplied data may still be updated in AfterLayout. Do not hand a
+    // transforming plugin a block whose final claimed bytes are not frozen.
+    getConfig().raise(Diag::error_plugin_owned_use)
+        << ("source consumed before final relocation application: " +
+            R->getSourcePath(getConfig().options()));
+    return false;
+  }
+  return true;
+}
+
 bool Module::validatePluginRelocations() {
   std::lock_guard<std::mutex> Guard(Mutex);
   PluginRelocationClaimsClosed = true;

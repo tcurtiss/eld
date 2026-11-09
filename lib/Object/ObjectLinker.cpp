@@ -2864,21 +2864,25 @@ void ObjectLinker::syncRelocationResult(uint8_t *Data, InputFile *Input) {
 
         return true;
       };
-      uint64_t ModifiedRelocData = 0;
-      if (ThisModule->getRelocationDataForSync(Relocation, ModifiedRelocData))
-        writeRelocationData(*Relocation, ModifiedRelocData, Data);
-      else if (SyncOneReloc(Relocation))
-        writeRelocationResult(*Relocation, Data);
+      writeRelocationResult(*Relocation, Data, SyncOneReloc(Relocation));
     } // for all relocations
   } // for all relocation section
 }
 
-void ObjectLinker::writeRelocationResult(Relocation &PReloc, uint8_t *POutput) {
+void ObjectLinker::writeRelocationResult(Relocation &PReloc, uint8_t *POutput,
+                                         bool SyncUnmodified) {
+  // All writers, including plugin-created chunks and internal relocations,
+  // must honor replacement bytes before filtering ordinary relocation results.
+  uint64_t Data = 0;
+  if (ThisModule->getRelocationDataForSync(&PReloc, Data)) {
+    writeRelocationData(PReloc, Data, POutput);
+    return;
+  }
   // Certain relocations such as R_RISCV_RELAX and R_RISCV_ALIGN do not
   // really apply. They are way to communicate linker to do certain
   // optimizations. Applying them may overrite the immediate bits based on
   // sequence in which they appear w.r.t. "real" relocation
-  if (getTargetBackend().shouldIgnoreRelocSync(&PReloc))
+  if (!SyncUnmodified || getTargetBackend().shouldIgnoreRelocSync(&PReloc))
     return;
 
   writeRelocationData(PReloc, PReloc.target(), POutput);
