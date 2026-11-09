@@ -493,6 +493,8 @@ public:
   /// the instruction pattern and account for target relaxation. This claims
   /// only U; setSymbolAddress does not implicitly claim any Uses. Conflicting
   /// claims cause a link error even if the returned error is ignored.
+  /// Plugin-created PROGBITS chunks are supported. Claimed source sections
+  /// cannot be consumed by file/memory-size plugins before final application.
   eld::Expected<void> claimUse(Use U);
 
   /// Return whether S can be interposed under the current link configuration.
@@ -798,9 +800,12 @@ public:
   eld::Expected<std::vector<Segment>> getSegmentTable() const;
 
   /// Applies relocations to an unrelocated buffer `Buf`.
+  /// Rejects surviving claims before final relocation validation, even if
+  /// replacement bytes have already been supplied and may still change.
   eld::Expected<void> applyRelocations(uint8_t *Buf);
 
   /// Apply all relocations or return an error.
+  /// Rejects surviving claims before final relocation validation.
   eld::Expected<void> doRelocation();
 
   /// Return a handle to the library `LibraryName` or an error.

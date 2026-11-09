@@ -287,12 +287,16 @@ LinkerWrapper::getFunction(void *LibraryHandle,
 
 eld::Expected<void> LinkerWrapper::applyRelocations(uint8_t *Buf) {
   CHECK_LINK_STATE(*this, "CreatingSegments", "AfterLayout");
+  if (!m_Module.validatePluginRelocationConsumption())
+    return std::make_unique<DiagnosticEntry>(Diag::error_relocations_plugin);
   m_Module.getLinker()->getObjectLinker()->syncRelocations(Buf);
   return {};
 }
 
 eld::Expected<void> LinkerWrapper::doRelocation() {
   CHECK_LINK_STATE(*this, "CreatingSegments");
+  if (!m_Module.validatePluginRelocationConsumption())
+    return std::make_unique<DiagnosticEntry>(Diag::error_relocations_plugin);
   /// FIXME: we can report better errors if ObjectLinker::relocation() returned
   /// eld::Expected
   if (!m_Module.getLinker()->getObjectLinker()->relocation(false))

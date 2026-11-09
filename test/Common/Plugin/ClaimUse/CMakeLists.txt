@@ -9,9 +9,19 @@ if(NOT CYGWIN AND LLVM_ENABLE_PIC)
     PARTIAL_SOURCES_INTENDED LINK_LIBS LW)
   add_llvm_library(EarlyClaimUse EarlyClaimUse.cpp
     PARTIAL_SOURCES_INTENDED LINK_LIBS LW)
+  add_llvm_library(CreatedUse CreatedUse.cpp
+    PARTIAL_SOURCES_INTENDED LINK_LIBS LW)
+  add_llvm_library(ClaimUseFileConsumer ClaimUseBlockConsumer.cpp
+    PARTIAL_SOURCES_INTENDED LINK_LIBS LW)
+  add_llvm_library(ClaimUseMemoryConsumer ClaimUseBlockConsumer.cpp
+    PARTIAL_SOURCES_INTENDED LINK_LIBS LW)
+  target_compile_definitions(ClaimUseMemoryConsumer PRIVATE MEMORY_SIZE)
   set(BUILD_SHARED_LIBS ${bsl})
 endif()
 add_plugin(ClaimUse)
 add_plugin(ForeignUseWriter)
 add_plugin(ClaimUseMerging)
 add_plugin(EarlyClaimUse)
+add_plugin(CreatedUse)
+add_plugin(ClaimUseFileConsumer)
+add_plugin(ClaimUseMemoryConsumer)
