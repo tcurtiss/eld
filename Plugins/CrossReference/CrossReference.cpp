@@ -5,8 +5,8 @@
 //===----------------------------------------------------------------------===//
 //
 // Builds a symbol-level caller-to-callee cross-reference table and writes it
-// to a dump file, as either compact text (the default) or JSON. Unlike the
-// linker's built-in --cref table (which records, per symbol, only the
+// to a dump file, as compact text or dashboard JSON (columnar by default).
+// Unlike the linker's built-in --cref table (which records, per symbol, only the
 // *input files* that reference it), this plugin records the specific
 // *referring symbol* for each reference, when it can be determined.
 //
@@ -66,7 +66,8 @@
 // cross-reference table to. The remaining keys are optional:
 //   file=<path>          -- path of the dump file to write (required).
 //   format=text|json|json_columnar
-//                          -- output format for the dump (default: text).
+//                          -- output format for the dump (default:
+//                            json_columnar).
 //                            "text" produces a compact symbol catalog and
 //                            numeric edge table. "json" produces the
 //                            section-oriented object format consumed by
@@ -77,7 +78,7 @@
 //   coalesce_dirs=none|unary
 //                          -- in JSON formats, fold empty single-child
 //                            directory chains after the first two path
-//                            components (default: none). Folded components
+//                            components (default: unary). Folded components
 //                            are joined with the visible separator "⟫".
 //   source_root=<path>    -- remove this path prefix from source paths in all
 //                            output formats. The prefix is removed only when
@@ -89,12 +90,10 @@
 //   show_gc=yes|no       -- whether to include garbage-collected
 //                            symbols/edges in the dump (default: no).
 //   cpp_demangle=yes|no  -- whether to print C++ symbol names demangled
-//                            (default: no; names are printed exactly as
-//                            they appear in the symbol table, e.g. mangled
-//                            for C++).
+//                            (default: yes; use no to keep raw ELF names).
 //   symbol_details=none|elf|dwarf
 //                          -- choose additional symbol metadata (default:
-//                            none). "elf" adds symbol identities and
+//                            dwarf). "elf" adds symbol identities and
 //                            attributed reference pairs to JSON. "dwarf"
 //                            additionally indexes function and variable
 //                            declaration sites (requires debug info such as
@@ -106,7 +105,7 @@
 //                            each worker.
 //   fragment_details=none|data|all
 //                          -- JSON-only initializer-fragment metadata
-//                            (default: none). "data" records anonymous
+//                            (default: data). "data" records anonymous
 //                            data-like targets referenced by data symbols;
 //                            "all" also records references from functions.
 //   exclude_symbols=<globs> -- comma-delimited list of glob patterns (see
@@ -160,7 +159,7 @@
 //                            cross-file references (default: no). Unlike
 //                            the other filters, this affects only edges, not
 //                            the symbols list.
-// e.g. "file=xref_dump.txt:show_gc=yes:cpp_demangle=yes".
+// e.g. "file=image.json" uses the dashboard defaults.
 //
 //===----------------------------------------------------------------------===//
 
@@ -374,8 +373,12 @@ public:
     std::istringstream Tokens(options);
     std::string Token;
     while (std::getline(Tokens, Token, ':')) {
-      if (Token.empty())
+      // Folded/literal YAML option blocks leave whitespace between tokens.
+      size_t Begin = Token.find_first_not_of(" \t\r\n");
+      if (Begin == std::string::npos)
         continue;
+      size_t End = Token.find_last_not_of(" \t\r\n");
+      Token = Token.substr(Begin, End - Begin + 1);
       size_t Eq = Token.find('=');
       if (Eq == std::string::npos) {
         HasError = true;
@@ -576,6 +579,7 @@ public:
         continue;
       }
       if (Key == "fragment_details") {
+        HasFragmentDetails = true;
         if (Value == "none") {
           FragmentDetails = FragmentDetailLevel::None;
         } else if (Value == "data") {
@@ -686,6 +690,12 @@ public:
           "Options string"));
       return;
     }
+    // The default initializer extension applies only when JSON symbol details
+    // are available. Explicit incompatible requests remain configuration
+    // errors.
+    if (!HasFragmentDetails && (Format == OutputFormat::Text ||
+                                SymbolDetails == SymbolDetailLevel::None))
+      FragmentDetails = FragmentDetailLevel::None;
     if (FragmentDetails != FragmentDetailLevel::None &&
         (Format == OutputFormat::Text ||
          SymbolDetails == SymbolDetailLevel::None)) {
@@ -2644,12 +2654,13 @@ private:
   std::string DumpPath;
   bool HasError = false;
   bool ShowGC = false;
-  bool CppDemangle = false;
-  SymbolDetailLevel SymbolDetails = SymbolDetailLevel::None;
-  FragmentDetailLevel FragmentDetails = FragmentDetailLevel::None;
+  bool CppDemangle = true;
+  SymbolDetailLevel SymbolDetails = SymbolDetailLevel::DWARF;
+  FragmentDetailLevel FragmentDetails = FragmentDetailLevel::Data;
+  bool HasFragmentDetails = false;
   bool Gzip = false;
-  bool CoalesceDirs = false;
-  OutputFormat Format = OutputFormat::Text;
+  bool CoalesceDirs = true;
+  OutputFormat Format = OutputFormat::DashboardColumnar;
   std::string Title;
   std::map<std::string, MemoryRegion> Regions;
   std::optional<std::string> CompressionPatterns;

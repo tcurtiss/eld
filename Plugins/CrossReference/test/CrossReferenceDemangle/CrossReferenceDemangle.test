@@ -2,8 +2,8 @@
 #BEGIN_COMMENT
 # Tests the CrossReference's cpp_demangle option: with cpp_demangle=yes,
 # C++ symbol names in the dump are printed demangled (e.g. "ns::bar(int, int)")
-# rather than in their mangled form; by default (cpp_demangle unset), names are
-# printed exactly as they appear in the symbol table, i.e. still mangled.
+# rather than in their mangled form. cpp_demangle=yes is the default;
+# cpp_demangle=no preserves the raw symbol-table spelling.
 #END_COMMENT
 #START_TEST
 RUN: %clangxx %clangxxopts -c %p/Inputs/1.cpp -o %t1.1.o -ffunction-sections

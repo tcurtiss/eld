@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile, export and analyze a real fixture without a browser or npm packages."""
 
+import gzip
 import json
 import struct
 import subprocess
@@ -150,13 +151,20 @@ SECTIONS {
         print(run([args.node, str(checker)] + files + [str(expectation)], env, work), end="")
 
         # Omission and invalid settings are part of the producer contract.
-        def export(extra, succeeds=True, entry="main", link_script=script):
+        def export(extra, succeeds=True, entry="main", link_script=script,
+                   fmt="json", configuration=None):
             output = work / "optional.json"
             output.unlink(missing_ok=True)
-            options = "file={}:format=json:exclude_local=no".format(output) + extra
-            config.write_text("GlobalPlugins:\n  - Type: LinkerPlugin\n"
-                              "    Name: CrossReference\n    Library: CrossReference\n"
-                              "    Options: " + json.dumps(options) + "\n")
+            compressed_output = Path(str(output) + ".gz")
+            compressed_output.unlink(missing_ok=True)
+            options = "file={}".format(output)
+            if fmt:
+                options += ":format=" + fmt
+            options += extra
+            config.write_text(configuration or
+                              ("GlobalPlugins:\n  - Type: LinkerPlugin\n"
+                               "    Name: CrossReference\n    Library: CrossReference\n"
+                               "    Options: " + json.dumps(options) + "\n"))
             command = [args.target_ld] + args.target_ld_args + args.target_ld_arg + objects
             command += ["--gc-sections", "-T", str(link_script), "-e", entry,
                         "-o", str(work / "image.out"), "--plugin-config", str(config)]
@@ -164,11 +172,45 @@ SECTIONS {
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             if succeeds:
                 assert result.returncode == 0, result.stdout
+                if fmt == "text":
+                    return output.read_text()
+                if compressed_output.exists():
+                    with gzip.open(compressed_output, "rt") as stream:
+                        return json.load(stream)
                 return json.loads(output.read_text())
             assert result.returncode != 0 and "CrossReference" in result.stdout, result.stdout
             assert not output.exists(), "Invalid settings must not produce an export"
+            assert not compressed_output.exists(), "Invalid settings must not produce a gzip export"
 
-        plain = export("")
+        def check_defaults(document):
+            assert document["format"] == "fia-columnar" and document["version"] == 1
+            assert document["coalesce_dirs"] == "unary"
+            assert any("⟫" in d[1] for d in document["strings"]["dirs"])
+            assert any("Box<demo::Tag>" == s[1] for s in document["strings"]["scopes"])
+            details = document["symbolDetails"]
+            assert details["sourceFiles"] and any(line > 0 for line in details["symbols"]["sourceLine"])
+            assert 1 in details["initializerFragments"]["refs"]["class"]
+
+        defaults = export("", fmt=None)
+        check_defaults(defaults)
+        template = Path(__file__).resolve().parent.parent / "CrossReference.template.yaml"
+        # Load the actual YAML through ELD, exercising its folded scalar parser.
+        configuration = template.read_text().replace("file=crossreference.json:",
+                                                     "file=" + str(work / "optional.json") + ":")
+        folded = export("", fmt=None, configuration=configuration)
+        check_defaults(folded)
+        assert folded == defaults
+        literal = export("", fmt=None, configuration=configuration.replace("Options: >-", "Options: |-"))
+        assert literal == defaults
+        plain = export(":cpp_demangle=no:symbol_details=none:coalesce_dirs=none")
+        assert "symbolDetails" not in plain
+        assert "coalesce_dirs" not in plain
+        assert export(":symbol_details=none")["nodes"]
+        assert "# Symbols:" in export(":symbol_details=none", fmt="text")
+        without_fragments = export(":fragment_details=none", fmt=None)
+        assert "initializerFragments" not in without_fragments["symbolDetails"]
+        export(":fragment_details=data", fmt="text", succeeds=False)
+        export(":symbol_details=none:fragment_details=data", succeeds=False)
         assert "title" not in plain and "compression" not in plain
         assert all("class" not in n for n in plain["nodes"])
         assert ("regions" in plain) == args.automatic_metadata

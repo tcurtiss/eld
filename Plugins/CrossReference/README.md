@@ -165,7 +165,15 @@ on macOS, or PATH on Windows. CTest arranges these paths automatically.
 ## Configuration
 
 The plugin is configured through a colon-delimited `key=value` option string.
-The `file` option is required.
+The `file` option is required. A file-only configuration now defaults to
+columnar dashboard JSON with demangled names, DWARF symbol details, data
+initializer metadata, and unary directory coalescing.
+
+Copy [`CrossReference.template.yaml`](CrossReference.template.yaml) for a
+complete option reference and a working multiline example. Whitespace around
+colon-separated tokens is ignored, so YAML folded (`>-`) and literal (`|-`)
+option blocks are supported; keep a colon between options and place comments
+outside the block.
 
 `symbol_details` controls optional symbol metadata.
 
@@ -182,15 +190,15 @@ The supported options are:
 | Option | Default | Description |
 | --- | --- | --- |
 | `file=<path>` | required | Output file. Existing contents are replaced. |
-| `format=text\|json\|json_columnar` | `text` | Selects the output format. |
+| `format=text\|json\|json_columnar` | `json_columnar` | Selects the output format. |
 | `gzip=yes\|no` | `no` | Compresses the selected output format as gzip and appends `.gz` to the output path. |
 | `source_root=<path>` | unset | Removes this complete path prefix from object-file paths, DWARF paths, and dashboard paths. |
 | `strip_prefix=<glob>` | unset | Removes the longest complete path prefix matching an LLVM glob. Mutually exclusive with `source_root`. |
-| `coalesce_dirs=none\|unary` | `none` | In JSON formats, folds empty single-child directory chains after the first two path components. |
+| `coalesce_dirs=none\|unary` | `unary` | In JSON formats, folds empty single-child directory chains after the first two path components. |
 | `show_gc=yes\|no` | `no` | Includes garbage-collected symbols and edges in text output. |
-| `cpp_demangle=yes\|no` | `no` | Demangles C++ names in output and name-pattern matching. |
-| `symbol_details=none\|elf\|dwarf` | `none` | `elf` adds symbol records and attributed reference pairs to JSON. `dwarf` additionally looks up function and variable declaration locations in DWARF, and adds source locations to JSON and text. Text always emits its compact symbol catalog and edge table. |
-| `fragment_details=none\|data\|all` | `none` | JSON-only logical initializer-fragment metadata. `data` records anonymous data-like targets referenced by data symbols; `all` also records known function containers. Requires `symbol_details=elf` or `dwarf`. |
+| `cpp_demangle=yes\|no` | `yes` | Demangles C++ names in output and name-pattern matching. |
+| `symbol_details=none\|elf\|dwarf` | `dwarf` | `elf` adds symbol records and attributed reference pairs to JSON. `dwarf` additionally looks up function and variable declaration locations in DWARF, and adds source locations to JSON and text. Text always emits its compact symbol catalog and edge table. |
+| `fragment_details=none\|data\|all` | `data` | JSON-only logical initializer-fragment metadata. `data` records anonymous data-like targets referenced by data symbols; `all` also records known function containers. Requires `symbol_details=elf` or `dwarf`. |
 | `exclude_symbols=<globs>` | unset | Comma-delimited name patterns. Matching symbols and their edges are omitted. |
 | `exclude_files=<globs>` | unset | Comma-delimited patterns matched against resolved object-file paths. |
 | `include_symbols=<globs>` | unset | If present, only symbols matching at least one pattern are retained. |
@@ -245,6 +253,11 @@ before the other text filters are applied.
 `exclude_intra_file` affects only text edges; both symbols remain in the symbol
 catalog. An unattributed edge has no caller and is not considered intra-file.
 
+The default `fragment_details=data` is disabled automatically for text output
+or `symbol_details=none`. Explicitly requesting fragment details in either
+incompatible mode is an error. `fragment_details=none` disables initializer
+metadata in otherwise detailed JSON exports.
+
 The dashboard JSON formats are section-oriented and intentionally do not apply
 the symbol filters, `show_gc`, or `exclude_intra_file`. They contain the
 section graph independently of the text dump filters. `cpp_demangle` and path
@@ -258,7 +271,8 @@ does not change DWARF name matching. Demangling adds CPU/allocation cost and
 usually increases output size, especially for template-heavy C++. Results are
 not cached across uses: section naming, symbol serialization, and text name
 filtering can demangle the same symbol again. Section naming runs in parallel;
-serialization is serial. Keep the default `cpp_demangle=no` for lowest overhead.
+serialization is serial. Use `cpp_demangle=no` for lowest overhead; readable
+C++ names are enabled by default.
 
 ## Parallel work
 

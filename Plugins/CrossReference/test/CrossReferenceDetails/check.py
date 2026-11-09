@@ -28,7 +28,7 @@ def load(path):
 mode, base = sys.argv[1], pathlib.Path(sys.argv[2])
 if mode == 'configs':
     base.mkdir(exist_ok=True)
-    modes = {'plain': 'format=json', 'none': 'format=json:symbol_details=none',
+    modes = {'plain': 'format=json:symbol_details=none', 'none': 'format=json:symbol_details=none:fragment_details=none',
              'detail': 'format=json:symbol_details=elf',
              'fragments': 'format=json_columnar:symbol_details=elf:fragment_details=data',
              'fragments_object': 'format=json:symbol_details=elf:fragment_details=data',
@@ -43,7 +43,9 @@ if mode == 'configs':
     for name, opts in modes.items():
         text = ('GlobalPlugins:\n  - Type: LinkerPlugin\n    Name: CrossReference\n'
                 '    Library: CrossReference\n    Options: ')
-        options = 'file=' + str(base / (name + '.json')) + ':' + opts
+        options = 'file=' + str(base / (name + '.json')) + ':coalesce_dirs=none:' + opts
+        if name != 'demangled':
+            options += ':cpp_demangle=no'
         (base / (name + '.yaml')).write_text(text + json.dumps(options) + '\n')
 elif mode == 'check':
     plain, no = load(base / 'plain.json')
