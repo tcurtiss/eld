@@ -1,5 +1,12 @@
 # Image Proctologist
 
+This dashboard is maintained with its CrossReference exporter in the ELD
+repository at `Plugins/CrossReference/dashboard/`. Make exporter, schema,
+and dashboard changes together here. See the [plugin development guide](../README.md#develop-the-exporter-and-dashboard-together)
+for the combined CMake build and producer/consumer checks. The original
+`image_analysis` repository was imported at commit `eec6d70` and remains a
+reference snapshot.
+
 An interactive, single-file HTML dashboard for understanding a large, monolithic firmware image from the linker's point of view: where the bytes go, what compression saves, what garbage collection throws away, what keeps the rest in the image, how subsystems depend on each other, and which code belongs together.
 
 It is built for a RAM-only system of several hundred MiB with a few hundred subsystems, linked with the [ELD](https://github.com/qualcomm/eld) linker. A linker plugin exports every input section, its size and output section, whether it survives garbage collection, and every reference between sections. The dashboard does all analysis in the browser. Nothing is uploaded.
@@ -161,6 +168,8 @@ tools/gen-sample.js  writes synthetic exports in either format, with DWARF detai
 tools/check.js       fast Node checks of the analysis and the planted sample stories
 tools/check-relationships.js  direction, neighborhood, path, attribution and filtering checks
 tools/check-details.js  symbol detail, alias, source grouping and validation checks
+tools/check-build.js  verifies that the committed HTML matches its sources
+tools/check-export.js  verifies real plugin exports from ../test/dashboard_test.py
 tools/browser_smoke.py  headless browser test of every view (Playwright)
 tools/capture.py     captures the key views and takeaways for a presentation (Playwright)
 tools/make-deck.js   builds a draft PowerPoint deck from the captures
@@ -189,6 +198,20 @@ python3 tools/browser_smoke.py --d3 path/to/d3.min.js --screenshots /tmp/shots
 ```
 
 Edit the files in `src/`, then rebuild. Don't edit `dist/` by hand.
+
+For combined development, configure and build the parent Plugins project as
+described in [CrossReference's README](../README.md), then run:
+
+```sh
+cmake --build /path/to/build-plugins --target check-crossreference-dashboard
+```
+
+With standalone `BUILD_TESTING=ON`, this also verifies real CrossReference
+exports through this dashboard's analyzer and leaves small exports under
+`/path/to/build-plugins/CrossReference/dashboard/exports/` for manual exploration.
+The built page is beside that directory. CMake discovers Node.js when available;
+it does not require npm packages or launch browsers. Run Playwright explicitly
+when a change needs browser interaction checks.
 
 ## Presentation (optional)
 

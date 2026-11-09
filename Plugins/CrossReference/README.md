@@ -9,6 +9,49 @@ The plugin runs from `ActBeforeWritingOutput`, after garbage collection and
 linker-generated stubs/trampolines have been created. It reads ELF input files;
 bitcode/LTO inputs are not inspected.
 
+## Develop the exporter and dashboard together
+
+The image analysis dashboard lives in [`dashboard/`](dashboard/README.md).
+Edit the C++ exporter and JavaScript consumer in this repository and commit
+schema changes together. The shared format is documented in
+[`dashboard/docs/export-format.md`](dashboard/docs/export-format.md).
+The dashboard was imported from `image_analysis` at commit `eec6d70` using
+Git subtree; its sources are ordinary tracked files, with no submodule setup.
+
+With Node.js 18 or newer available, a standalone CMake build also assembles
+`<build>/CrossReference/dashboard/image-anatomy.html`. No npm dependencies
+are needed to build or run the analysis checks. The C++ plugin still builds
+without Node; `-DCROSSREFERENCE_BUILD_DASHBOARD=OFF` disables dashboard targets.
+
+```sh
+cmake --build build-crossreference --target CrossReferenceDashboard
+cmake --build build-crossreference --target check-crossreference-dashboard
+```
+
+The check target runs the dashboard's analysis and build checks. In a
+standalone build with `BUILD_TESTING=ON`, it also builds CrossReference and
+runs `ELDStandalone.CrossReferenceDashboard`: two small C files are compiled
+and linked with garbage collection, exported as gzipped object and columnar
+JSON with `symbol_details=none`, `elf`, and `dwarf`, then read by the actual
+JavaScript analyzer. This checks section kinds, discarded code, source
+ownership, initializer attachment, cross-subsystem relationships, format
+equivalence, and unchanged byte/reference accounting.
+
+The six small test exports are kept in
+`<build>/CrossReference/dashboard/exports/` so they can be loaded into the
+dashboard while developing. To run only the producer/consumer check after
+building the plugin:
+
+```sh
+ctest --test-dir build-crossreference --output-on-failure \
+  -R '^ELDStandalone.CrossReferenceDashboard$'
+```
+
+Inside `dashboard/`, `npm run build` updates the committed HTML and
+`npm run check` runs the lightweight JavaScript checks. Playwright checks
+remain an explicit, optional step for browser interactions; they are never
+launched by the CMake targets. See the dashboard README for details.
+
 ## Build as part of ELD
 
 Configure ELD/LLVM normally, then build the plugin target:

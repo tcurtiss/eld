@@ -104,7 +104,7 @@ if(ELD_ENABLE_LIT_TESTS)
 endif()
 
 function(eld_add_standalone_test)
-  cmake_parse_arguments(TEST "" "NAME;TARGET;SCRIPT" "" ${ARGN})
+  cmake_parse_arguments(TEST "" "NAME;TARGET;SCRIPT" "ARGS" ${ARGN})
   if(TEST_UNPARSED_ARGUMENTS OR NOT TEST_NAME OR NOT TEST_SCRIPT
       OR NOT TARGET "${TEST_TARGET}")
     message(FATAL_ERROR
@@ -130,7 +130,7 @@ function(eld_add_standalone_test)
       --target-ld "${ELD_TARGET_LD}"
       --target-triple "${ELD_TARGET_TRIPLE}"
       "--target-cxx-args=${_cxx_arguments}"
-      "--target-ld-args=${_ld_arguments}")
+      "--target-ld-args=${_ld_arguments}" ${TEST_ARGS})
 endfunction()
 
 function(eld_add_standalone_lit_test)

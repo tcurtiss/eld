@@ -5,7 +5,7 @@
   "description": "Single-file dashboard for the anatomy of a large linked firmware image: size, compression, eliminated code, ownership and connectivity.",
   "scripts": {
     "build": "node tools/build.js",
-    "check": "node tools/check.js && node tools/check-details.js && node tools/check-relationships.js",
+    "check": "node tools/check.js && node tools/check-details.js && node tools/check-relationships.js && node tools/check-build.js",
     "sample": "node tools/gen-sample.js",
     "lint": "eslint ."
   },
