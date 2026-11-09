@@ -10,9 +10,14 @@
 # OVERLAY output sections. Assigned addresses are IDs, not dereferenceable data.
 # Enable this plugin only for the final link; plugin-enabled -r links fail.
 #
-# YAML supports whole-line and inline # comments outside quoted strings.
-# Options is ONE colon-delimited string, not separate YAML keys. Do not put
-# comments inside that string, or insert whitespace around its keys/separators.
+# Options is ONE colon-delimited string, not separate YAML keys. Use >- (folded)
+# or |- (literal) for multiline options without backslashes; > and | work too.
+# Surrounding whitespace in keys, values and comma-list entries is ignored.
+# Colons between options and commas between list entries are still required.
+# Do not split individual keys, numbers or section names across lines.
+# YAML supports # comments outside the Options scalar, including after >- or |-.
+# A # on an indented line INSIDE a block scalar is literal option content, NOT
+# a YAML comment. Keep explanatory comments above Options or after its indicator.
 GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
@@ -84,10 +89,28 @@ GlobalPlugins:
     # Except section=, repeated keys use the last value. Unknown keys/malformed
     # fields are ignored; unknown hash names select MD5. Linker plugin tracing
     # (--trace=plugin) reports these cases; it is not another plugin option.
-    Options: "section=.dedup:hash=md5:seq_start=0:output_format=csv,json:output_suffix=reassign:gzip=no:debug=no:clean_strings=no" # Edit this string.
+    Options: >- # Edit these colon-delimited options; no backslashes needed.
+      section=.dedup:
+      hash=md5:
+      seq_start=0:
+      output_format=csv,json:
+      output_suffix=reassign:
+      gzip=no:
+      debug=no:
+      clean_strings=no
 
     # Alternative with reserved IDs and compressed mapping/debug outputs:
-    # Options: "section=QSR_STR_SO:hash=sha1:exclude_range=0x1234-0x4568,100-201,0xffff0000-0xfffffff1:output_format=csv,json:output_suffix=reassign:gzip=yes:debug=yes:clean_strings=yes"
+    # Options: |-
+    #   section=QSR_STR_SO:
+    #   hash=sha1:
+    #   exclude_range=0x1234-0x4568,
+    #                 100-201,
+    #                 0xffff0000-0xfffffff1:
+    #   output_format=csv,json:
+    #   output_suffix=reassign:
+    #   gzip=yes:
+    #   debug=yes:
+    #   clean_strings=yes
     # For image.so this writes image.so.reassign.csv.gz,
     # image.so.reassign.json.gz, and image.so.reassign.debug.json.gz.
     #

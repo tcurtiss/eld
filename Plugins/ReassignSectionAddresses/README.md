@@ -79,7 +79,10 @@ code where necessary. This does not dereference or execute IDs.
 ## Options
 
 Options are colon-delimited `key=value` pairs. When an option accepts more
-than one value, its value list remains comma-delimited:
+than one value, its value list remains comma-delimited. Surrounding ASCII
+whitespace (including spaces, tabs, CR and LF) is ignored in option keys,
+values and individual comma-separated entries. Internal whitespace is preserved;
+do not split a key, number or section name across lines.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -100,13 +103,38 @@ GlobalPlugins:
   - Type: OutputSectionIterator
     Name: ReassignSectionAddresses
     Library: ReassignSectionAddresses
-    Options: "section=.dedup:hash=md5:output_format=csv,json:gzip=yes:debug=yes"
+    Options: >-
+      section=.dedup:
+      hash=md5:
+      output_format=csv,json:
+      gzip=yes:
+      debug=yes
 ```
 
 ELD plugin configuration files are YAML and accept `#` comments on their own
-lines or after a value. Keep comments outside the quoted `Options` string;
-the plugin receives it as a single colon-delimited string, not individual YAML
-option keys. Both in-tree and standalone builds copy the fully annotated
+lines or after a value. `Options: >-` (folded) and `Options: |-` (literal) both
+allow multiline options without backslash continuations; `>` and `|` also work
+with their final newline. Colons are still required between options, and commas
+are still required between list entries. For example, ranges can be wrapped:
+
+```yaml
+    Options: |-
+      section=QSR_STR_SO:
+      hash=md5:
+      exclude_range=0xd6000000-0xd6400000,
+                    0xfe000000-0xfe800000,
+                    0xf8000000-0xfa000000:
+      output_format=csv,
+                    json:
+      output_suffix=qtrace
+```
+
+Keep comments outside the `Options` scalar, for example above `Options:` or
+after its `>-`/`|-` indicator. A `#` inside an indented block scalar is literal
+option content, not a YAML comment. The plugin receives one colon-delimited
+string, not individual YAML option keys; newlines do not replace colons.
+Existing single-line strings and escaped double-quoted continuations still work.
+Both in-tree and standalone builds copy the fully annotated
 [`ReassignSectionAddresses.yaml`](ReassignSectionAddresses.yaml) beside the
 built plugin library. That runnable example is part of this plugin's
 documentation and describes every supported option. Copy it elsewhere before
