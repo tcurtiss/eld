@@ -54,6 +54,19 @@ DETAIL_SAMPLE = {
 DETAIL_SAMPLE['symbolDetails']['symbols'][0].update(linkageName='_Z5entryv', sourceFile=0, sourceLine=7)
 DETAIL_SAMPLE['symbolDetails']['symbols'][2].update(sourceFile=1, sourceLine=11)
 
+# A large compressed object is promoted out of its file on drill-down. Its
+# remainder mixes compressed data, ordinary data, bss, and an eliminated node.
+COMPRESSION_SAMPLE = {
+    "nodes": [
+        {"id": 0, "name": "modem_heap_block", "path": "modem/heap/heap.o", "kind": "data", "size": 53 * 1048576, "root": True, "out": ".region_clade2"},
+        {"id": 1, "name": "compressed_tail", "path": "modem/heap/heap.o", "kind": "data", "size": 4096, "out": ".region_clade2"},
+        {"id": 2, "name": "ordinary_tail", "path": "modem/heap/heap.o", "kind": "data", "size": 4096, "out": ".data"},
+        {"id": 3, "name": "zero_tail", "path": "modem/heap/heap.o", "kind": "bss", "size": 8192, "out": ".bss"},
+        {"id": 4, "name": "eliminated_tail", "path": "modem/heap/heap.o", "kind": "data", "size": 32 * 1048576, "live": False, "out": ".data"},
+    ],
+    "edges": [{"src": 0, "dst": i} for i in range(1, 4)],
+}
+
 
 def run(cmd):
     subprocess.run(cmd, cwd=ROOT, check=True)
@@ -77,6 +90,9 @@ async def main(args):
     details_col = os.path.join(tmp, "details.columnar.json")
     with open(details_obj, "w") as f:
         json.dump(DETAIL_SAMPLE, f)
+    compression_obj = os.path.join(tmp, "compression.objects.json")
+    with open(compression_obj, "w") as f:
+        json.dump(COMPRESSION_SAMPLE, f)
     run(["node", "-e", "const fs=require('fs'),{toColumnar}=require('./src/core.js');"
          "fs.writeFileSync(process.argv[2],JSON.stringify(toColumnar(JSON.parse(fs.readFileSync(process.argv[1])))));",
          details_obj, details_col])
@@ -647,6 +663,48 @@ async def main(args):
                 if '2 directed hops' not in await pg.inner_text('#exPath'):
                     errors.append(f'{label}: indirect symbol path was not found')
                 await click('[data-workspace="footprint"]')
+            await pg.set_input_files("#fileIn", compression_obj)
+            await pg.wait_for_timeout(300)
+            await pg.wait_for_function(READY, timeout=120000)
+            await pg.select_option('#tmColor', 'comp')
+            for hierarchy in ('source', 'kind'):
+                await tree('treeMode', hierarchy)
+                await pg.fill('#tmSearch', 'modem_heap_block')
+                await pg.locator('#tmSearch').press('Enter')
+                compression_tiles = await pg.evaluate("""() => Array.from(document.querySelectorAll('#treemap .tm-leaf'), el => {
+                  const n=el.__data__.data.ref;
+                  return {name:n.name,stored:n.st,projected:n.pj,compressed:n.eg,compressible:n.cp,fill:el.getAttribute('fill')};
+                })""")
+                heap = next((n for n in compression_tiles if n['name'] == 'modem_heap_block'), None)
+                if not heap or any(heap.get(k) != v for k, v in {
+                        'stored': 53 * 1048576 / 2, 'projected': 53 * 1048576 / 2,
+                        'compressed': 53 * 1048576, 'compressible': 53 * 1048576,
+                        'fill': 'rgb(42, 140, 126)'}.items()):
+                    errors.append(f'{label}: {hierarchy} lazy compressed tile has incorrect metrics/color: {heap}')
+                # The remainder can occupy less than one pixel, so inspect its
+                # tree metrics even when the renderer omits its SVG rectangle.
+                remainder = await pg.evaluate("""() => {
+                  const root=document.querySelector('#treemap .tm-leaf').__data__.ancestors().at(-1).data.ref;
+                  const pending=[root];
+                  while(pending.length){const n=pending.pop();
+                    if(n.name.startsWith('Other symbols'))return {stored:n.st,projected:n.pj,compressed:n.eg,compressible:n.cp};
+                    pending.push(...(n.children||[]));
+                  }
+                  return null;
+                }""")
+                remainder_bytes = 6144 if hierarchy == 'kind' else 14336
+                expected = {'stored': remainder_bytes, 'projected': remainder_bytes,
+                            'compressed': 4096, 'compressible': 8192}
+                if not remainder or any(remainder.get(k) != v for k, v in expected.items()):
+                    errors.append(f'{label}: {hierarchy} lazy remainder has incorrect compression metrics: {remainder}')
+                await pg.locator('#tmMeasure').select_option('live')
+                await pg.locator('#tmMeasure').select_option('stored')
+                refreshed = await pg.evaluate("""() => {
+                  const el=Array.from(document.querySelectorAll('#treemap .tm-leaf')).find(el=>el.__data__.data.ref.name==='modem_heap_block');
+                  return el?.getAttribute('fill');
+                }""")
+                if heap and refreshed != heap.get('fill'):
+                    errors.append(f'{label}: {hierarchy} compression color changed after recomputation')
             overflow = await pg.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
             if overflow:
                 errors.append(f"{width}px: page scrolls sideways")

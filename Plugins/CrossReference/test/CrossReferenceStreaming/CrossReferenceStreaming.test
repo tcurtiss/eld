@@ -1,0 +1,5 @@
+# Large names force several gzip blocks; many DWARF inputs exercise the bounded
+# sliding window. All formats retain identical serial/parallel JSON bytes.
+RUN: %python %p/check.py generate %t
+RUN: %python %p/check.py compile %t %clang %clangopts
+RUN: %python %p/check.py check %t %link %linkopts

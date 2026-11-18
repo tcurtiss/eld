@@ -9,6 +9,21 @@ The plugin runs from `ActBeforeWritingOutput`, after garbage collection and
 linker-generated stubs/trampolines have been created. It reads ELF input files;
 bitcode/LTO inputs are not inspected.
 
+Symbol/section collection, reference scanning and DWARF parsing use the linker's
+thread count. Reference and DWARF results are merged in input order through a
+bounded sliding window, preserving deterministic IDs while workers continue
+processing later files. `gzip=yes` streams output through bounded 4 MiB
+compression blocks at level 9 using the same thread setting. It produces one
+gzip member, compatible with the dashboard's `DecompressionStream` loader;
+decompressed JSON and gzip bytes are identical across thread counts.
+
+To profile a link, add these linker options:
+
+```text
+--threads --thread-count=8
+--time-region=all-user-plugins --emit-timing-stats=crossref-timing.txt
+```
+
 ## Develop the exporter and dashboard together
 
 The image analysis dashboard lives in [`dashboard/`](dashboard/README.md).

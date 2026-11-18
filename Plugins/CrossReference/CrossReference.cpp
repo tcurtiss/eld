@@ -164,8 +164,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "../Support/PluginPortable.h"
-#include "../Support/PluginThreadPool.h"
+#include "../Support/PluginGzipStream.h"
 #include "LinkerPlugin.h"
 #include "PluginVersion.h"
 #include "SourceLocations.h"
@@ -714,19 +713,19 @@ public:
       return;
     {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference buildStubMap", "CrossReference",
+          "CrossReference buildStubMap", "buildStubMap",
           getLinker()->isTimingEnabled()));
       buildStubMap();
     }
     {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference collectAllSymbols", "CrossReference",
+          "CrossReference collectAllSymbols", "collectAllSymbols",
           getLinker()->isTimingEnabled()));
       collectAllSymbols();
     }
     {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference buildDashboardSections", "CrossReference",
+          "CrossReference buildDashboardSections", "buildDashboardSections",
           getLinker()->isTimingEnabled()));
       buildDashboardMetadata();
       if (HasError)
@@ -735,39 +734,43 @@ public:
     }
     if (CoalesceDirs) {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference coalesceDashboardPaths", "CrossReference",
+          "CrossReference coalesceDashboardPaths", "coalesceDashboardPaths",
           getLinker()->isTimingEnabled()));
       DashboardPathCompressor.build(DashboardPaths);
     }
-    if (wantSymbolDetails())
+    if (wantSymbolDetails()) {
+      AutoTimer Timer(getLinker()->CreateTimer(
+          "CrossReference buildDashboardSymbols", "buildDashboardSymbols",
+          getLinker()->isTimingEnabled()));
       buildDashboardSymbols();
+    }
     if (Format == OutputFormat::Text || wantSymbolDetails()) {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference buildChunkSymbolIndex", "CrossReference",
+          "CrossReference buildChunkSymbolIndex", "buildChunkSymbolIndex",
           getLinker()->isTimingEnabled()));
       buildChunkSymbolIndex();
     }
     {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference walkReferences", "CrossReference",
+          "CrossReference walkReferences", "walkReferences",
           getLinker()->isTimingEnabled()));
       walkReferences();
     }
     if (Format == OutputFormat::Text) {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference computeIncomingRefCounts", "CrossReference",
+          "CrossReference computeIncomingRefCounts", "computeIncomingRefCounts",
           getLinker()->isTimingEnabled()));
       computeIncomingRefCounts();
     }
     if (wantDWARF()) {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference buildDWARFIndex", "CrossReference",
+          "CrossReference buildDWARFIndex", "buildDWARFIndex",
           getLinker()->isTimingEnabled()));
       buildDWARFIndex();
     }
     {
       AutoTimer Timer(getLinker()->CreateTimer(
-          "CrossReference writeDump", "CrossReference",
+          "CrossReference writeDump", "writeDump",
           getLinker()->isTimingEnabled()));
       if (Format != OutputFormat::Text && !validateDashboardNumbers())
         return;
@@ -926,6 +929,37 @@ private:
     }
   }
 
+  ThreadPool *workPool(size_t NumWorkers) {
+    if (NumWorkers == 1)
+      return nullptr;
+    if (!WorkPool || WorkPoolThreads != NumWorkers) {
+      WorkPool = std::make_unique<ThreadPool>(NumWorkers);
+      WorkPoolThreads = NumWorkers;
+    }
+    return WorkPool.get();
+  }
+
+  // Keep workers running while the calling thread merges the oldest result.
+  // The sliding window bounds memory without a barrier between fixed batches.
+  template <typename Produce, typename Consume>
+  void forEachWorkResult(size_t WorkItems, Produce &&Fn, Consume &&Merge) {
+    size_t NumWorkers = workerCount(WorkItems);
+    using Result = std::invoke_result_t<Produce, size_t>;
+    OrderedWorkQueue<Result> Queue(workPool(NumWorkers), 2 * NumWorkers);
+    size_t Next = 0;
+    auto Fill = [&] {
+      while (Next < WorkItems && !Queue.full()) {
+        size_t I = Next++;
+        Queue.push([&, I] { return Fn(I); });
+      }
+    };
+    Fill();
+    while (!Queue.empty()) {
+      Queue.pop(Merge);
+      Fill();
+    }
+  }
+
   template <typename Function>
   void forEachWorkItem(size_t WorkItems, Function &&Fn) {
     size_t NumWorkers = workerCount(WorkItems);
@@ -935,13 +969,10 @@ private:
       return;
     }
 
-    if (!WorkPool || WorkPoolThreads != NumWorkers) {
-      WorkPool = std::make_unique<ThreadPool>(NumWorkers);
-      WorkPoolThreads = NumWorkers;
-    }
+    ThreadPool *Pool = workPool(NumWorkers);
     std::atomic<size_t> Next{0};
     for (size_t Worker = 0; Worker < NumWorkers; ++Worker) {
-      WorkPool->run([&] {
+      Pool->run([&] {
         while (true) {
           size_t I = Next.fetch_add(1, std::memory_order_relaxed);
           if (I >= WorkItems)
@@ -950,7 +981,7 @@ private:
         }
       });
     }
-    WorkPool->wait();
+    Pool->wait();
   }
 
   std::string outputPath(const std::string &RawPath) const {
@@ -1907,32 +1938,29 @@ private:
     std::unordered_map<uint64_t, EdgeInfo> EdgeCounts;
     SymbolEdgeMap DetailedCounts;
     FragmentMap FragmentCounts;
-    // Bound transient per-file edge maps; merge in input order for reproducible
-    // results regardless of worker scheduling.
-    size_t BatchSize = 2 * workerCount(InputFiles.size());
-    for (size_t Begin = 0; Begin < InputFiles.size(); Begin += BatchSize) {
-      size_t Count = std::min(BatchSize, InputFiles.size() - Begin);
-      std::vector<ReferenceWorkResult> Results(Count);
-      forEachWorkItem(Count, [&](size_t I) {
-        walkReferencesForInputFile(InputFiles[Begin + I], Results[I]);
-      });
-      for (ReferenceWorkResult &Result : Results) {
-        for (const auto &Entry : Result.Edges) {
-          EdgeInfo &Info = EdgeCounts[Entry.first];
-          Info.Count += Entry.second.Count;
-          Info.Flags |= Entry.second.Flags;
-        }
-        for (const auto &Entry : Result.DashboardEdgeCounts)
-          DashboardEdgeCounts[Entry.first] += Entry.second;
-        for (const auto &Entry : Result.SymbolEdges) {
-          EdgeInfo &Info = DetailedCounts[Entry.first];
-          Info.Count += Entry.second.Count;
-          Info.Flags |= Entry.second.Flags;
-        }
-        for (const auto &Entry : Result.Fragments)
-          FragmentCounts[Entry.first] += Entry.second;
-      }
-    }
+    forEachWorkResult(
+        InputFiles.size(),
+        [&](size_t I) {
+          ReferenceWorkResult Result;
+          walkReferencesForInputFile(InputFiles[I], Result);
+          return Result;
+        },
+        [&](ReferenceWorkResult &Result) {
+          for (const auto &Entry : Result.Edges) {
+            EdgeInfo &Info = EdgeCounts[Entry.first];
+            Info.Count += Entry.second.Count;
+            Info.Flags |= Entry.second.Flags;
+          }
+          for (const auto &Entry : Result.DashboardEdgeCounts)
+            DashboardEdgeCounts[Entry.first] += Entry.second;
+          for (const auto &Entry : Result.SymbolEdges) {
+            EdgeInfo &Info = DetailedCounts[Entry.first];
+            Info.Count += Entry.second.Count;
+            Info.Flags |= Entry.second.Flags;
+          }
+          for (const auto &Entry : Result.Fragments)
+            FragmentCounts[Entry.first] += Entry.second;
+        });
     DetailedEdges.assign(DetailedCounts.begin(), DetailedCounts.end());
     std::sort(DetailedEdges.begin(), DetailedEdges.end(),
               [](const auto &A, const auto &B) { return A.first < B.first; });
@@ -2006,7 +2034,7 @@ private:
   // Populates SymbolSourceLoc (symbol -> declaring source file + line) from
   // DWARF debug info, when symbol_details=dwarf. For each input file that
   // defines at least one exported symbol, parse DWARF once in a bounded
-  // per-file batch.
+  // sliding window of per-file tasks.
   // Only matching subprogram/variable names are retained. A worker releases its
   // reader before returning locations; the serial merge interns cleaned paths.
   // Missing or ambiguous declarations have no source location.
@@ -2034,32 +2062,32 @@ private:
       Wanted[It.first->second].push_back(Sym);
     }
     std::unordered_map<std::string, uint32_t> FileIDs;
-    size_t BatchSize = 2 * workerCount(InputFiles.size());
-    for (size_t Begin = 0; Begin < InputFiles.size(); Begin += BatchSize) {
-      size_t Count = std::min(BatchSize, InputFiles.size() - Begin);
-      std::vector<crossreference::FileSources> Results(Count);
-      forEachWorkItem(Count, [&](size_t I) {
-        Results[I] = crossreference::readSourceLocations(InputFiles[Begin + I],
-                                                         Wanted[Begin + I]);
-        std::vector<Symbol>().swap(Wanted[Begin + I]);
-      });
-      // Only this serial merge normalizes/interns paths. outputPath owns a
-      // mutable cache, so it must never be called from DWARF worker threads.
-      for (const auto &Result : Results) {
-        std::vector<uint32_t> IDs;
-        IDs.reserve(Result.Files.size());
-        for (const std::string &File : Result.Files) {
-          std::string Path = outputPath(File);
-          auto It = FileIDs.emplace(Path, SourceFiles.size());
-          if (It.second)
-            SourceFiles.push_back(std::move(Path));
-          IDs.push_back(It.first->second);
-        }
-        for (const auto &Entry : Result.Locations)
-          SymbolSourceLoc.emplace(Entry.first, SourceLoc{IDs[Entry.second.File],
-                                                         Entry.second.Line});
-      }
-    }
+    forEachWorkResult(
+        InputFiles.size(),
+        [&](size_t I) {
+          auto Result =
+              crossreference::readSourceLocations(InputFiles[I], Wanted[I]);
+          std::vector<Symbol>().swap(Wanted[I]);
+          return Result;
+        },
+        [&](const crossreference::FileSources &Result) {
+          // Only this serial merge normalizes/interns paths. outputPath owns a
+          // mutable cache, so it must never be called from DWARF worker
+          // threads.
+          std::vector<uint32_t> IDs;
+          IDs.reserve(Result.Files.size());
+          for (const std::string &File : Result.Files) {
+            std::string Path = outputPath(File);
+            auto It = FileIDs.emplace(Path, SourceFiles.size());
+            if (It.second)
+              SourceFiles.push_back(std::move(Path));
+            IDs.push_back(It.first->second);
+          }
+          for (const auto &Entry : Result.Locations)
+            SymbolSourceLoc.emplace(
+                Entry.first,
+                SourceLoc{IDs[Entry.second.File], Entry.second.Line});
+        });
   }
 
   // Local symbols with the same name can appear in different input files
@@ -2459,6 +2487,11 @@ private:
 
     std::vector<int> SectionFiles;
     std::vector<int> SectionOuts;
+    // Preserve first-encounter ID assignment, but parse/intern each unique path
+    // and output only once instead of repeating it for every input section.
+    std::vector<int> PathFiles(DashboardPaths.size(), -1);
+    std::vector<int> OutputIDs(DashboardOutputs.size(), -1);
+    SectionScopes.reserve(DashboardSections.size());
     SectionFiles.reserve(DashboardSections.size());
     SectionOuts.reserve(DashboardSections.size());
     for (const DashboardSection &S : DashboardSections) {
@@ -2471,10 +2504,18 @@ private:
         Parent = Inserted.first->second;
       }
       SectionScopes.push_back(Parent);
-      SectionFiles.push_back(internPath(dashboardPath(S.PathID)));
-      SectionOuts.push_back(S.OutputID == UINT32_MAX
-                                ? -1
-                                : internOut(DashboardOutputs[S.OutputID]));
+      int &File = PathFiles[S.PathID];
+      if (File == -1)
+        File = internPath(dashboardPath(S.PathID));
+      SectionFiles.push_back(File);
+      int Output = -1;
+      if (S.OutputID != UINT32_MAX) {
+        int &ID = OutputIDs[S.OutputID];
+        if (ID == -1)
+          ID = internOut(DashboardOutputs[S.OutputID]);
+        Output = ID;
+      }
+      SectionOuts.push_back(Output);
     }
 
     std::vector<std::pair<uint64_t, uint64_t>> SortedEdges;
@@ -2604,55 +2645,46 @@ private:
     return CoalesceDirs ? DashboardPathCompressor.coalesce(Path) : Path;
   }
 
-  static void writeLE32(std::ostream &Out, uint32_t Value) {
-    char Bytes[4];
-    for (unsigned Shift = 0; Shift < 32; Shift += 8)
-      Bytes[Shift / 8] = static_cast<char>((Value >> Shift) & 0xff);
-    Out.write(Bytes, sizeof(Bytes));
-  }
-
-  bool writeGzipDump(const std::string &Path, const std::string &Payload) {
-    if (!portable::gzipPayload(Path, Payload)) {
+  void writeDump() {
+    const std::string DumpPath = getLinker()->getOutputFileName() + "." +
+                                 OutputSuffix + ".json" + (Gzip ? ".gz" : "");
+    std::ofstream File(DumpPath,
+                       std::ios::out | std::ios::trunc |
+                           (Gzip ? std::ios::binary : std::ios::openmode(0)));
+    if (!File) {
       getLinker()->reportDiag(
           getLinker()->getErrorDiagID(
               "CrossReference could not open dump file '%0' for "
               "writing"),
-          Path);
-      return false;
+          DumpPath);
+      return;
     }
-    return true;
-  }
-
-  void writeDump() {
-    const std::string DumpPath =
-        getLinker()->getOutputFileName() + "." + OutputSuffix + ".json";
-    if (!Gzip) {
-      std::ofstream Out(DumpPath, std::ios::out | std::ios::trunc);
-      if (!Out) {
-        getLinker()->reportDiag(
-            getLinker()->getErrorDiagID(
-                "CrossReference could not open dump file '%0' for "
-                "writing"),
-            DumpPath);
-        return;
-      }
+    auto Write = [&](std::ostream &Out) {
       if (Format == OutputFormat::DashboardObject)
         writeDashboardObject(Out);
       else if (Format == OutputFormat::DashboardColumnar)
         writeDashboardColumnar(Out);
       else
         writeTextDump(Out);
-      return;
+    };
+    bool Good;
+    if (Gzip) {
+      size_t NumWorkers = workerCount(std::numeric_limits<size_t>::max());
+      portable::GzipOutputStream Out(File, workPool(NumWorkers), NumWorkers);
+      Write(Out);
+      Good = Out.finish();
+    } else {
+      Write(File);
+      File.flush();
+      Good = bool(File);
     }
-
-    std::ostringstream Buffer;
-    if (Format == OutputFormat::DashboardObject)
-      writeDashboardObject(Buffer);
-    else if (Format == OutputFormat::DashboardColumnar)
-      writeDashboardColumnar(Buffer);
-    else
-      writeTextDump(Buffer);
-    writeGzipDump(DumpPath + ".gz", Buffer.str());
+    File.close();
+    Good &= bool(File);
+    if (!Good)
+      getLinker()->reportDiag(
+          getLinker()->getErrorDiagID(
+              "CrossReference could not write dump file '%0'"),
+          DumpPath);
   }
 
   std::string OutputSuffix = "crossref";

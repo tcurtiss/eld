@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -18,6 +19,7 @@
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -176,41 +178,49 @@ private:
 class JSONWriter {
 public:
   explicit JSONWriter(std::ostream &Out) : Out_(Out) {}
+  ~JSONWriter() { flushBuffer(); }
+
+  JSONWriter(const JSONWriter &) = delete;
+  JSONWriter &operator=(const JSONWriter &) = delete;
 
   template <typename F> void object(F &&Fn) {
     beginValue();
-    Out_ << '{';
+    put('{');
     Contexts_.push_back({true, true});
     Fn();
     Contexts_.pop_back();
-    Out_ << '}';
+    put('}');
+    if (Contexts_.empty())
+      flushBuffer();
   }
 
   template <typename F> void array(F &&Fn) {
     beginValue();
-    Out_ << '[';
+    put('[');
     Contexts_.push_back({false, true});
     Fn();
     Contexts_.pop_back();
-    Out_ << ']';
+    put(']');
+    if (Contexts_.empty())
+      flushBuffer();
   }
 
   template <typename F> void attributeObject(const char *Key, F &&Fn) {
     attributeName(Key);
-    Out_ << '{';
+    put('{');
     Contexts_.push_back({true, true});
     Fn();
     Contexts_.pop_back();
-    Out_ << '}';
+    put('}');
   }
 
   template <typename F> void attributeArray(const char *Key, F &&Fn) {
     attributeName(Key);
-    Out_ << '[';
+    put('[');
     Contexts_.push_back({false, true});
     Fn();
     Contexts_.pop_back();
-    Out_ << ']';
+    put(']');
   }
 
   template <typename T> void attribute(const char *Key, const T &Value) {
@@ -221,20 +231,25 @@ public:
   void attributeHex(const char *Key, ArrayRef<uint8_t> Bytes) {
     attributeName(Key);
     static constexpr char Digits[] = "0123456789abcdef";
-    Out_.put('"');
+    put('"');
     for (uint8_t Byte : Bytes) {
-      Out_.put(Digits[Byte >> 4]);
-      Out_.put(Digits[Byte & 15]);
+      put(Digits[Byte >> 4]);
+      put(Digits[Byte & 15]);
     }
-    Out_.put('"');
+    put('"');
   }
 
   template <typename T> void value(const T &Value) {
     beginValue();
     writeValue(Value);
+    if (Contexts_.empty())
+      flushBuffer();
   }
 
-  void flush() { Out_.flush(); }
+  void flush() {
+    flushBuffer();
+    Out_.flush();
+  }
 
 private:
   struct Context {
@@ -242,10 +257,34 @@ private:
     bool First;
   };
 
+  void flushBuffer() {
+    if (Used_) {
+      Out_.write(Buffer_.data(), Used_);
+      Used_ = 0;
+    }
+  }
+
+  void put(char C) {
+    if (Used_ == Buffer_.size())
+      flushBuffer();
+    Buffer_[Used_++] = C;
+  }
+
+  void append(std::string_view Text) {
+    while (!Text.empty()) {
+      if (Used_ == Buffer_.size())
+        flushBuffer();
+      size_t Count = std::min(Text.size(), Buffer_.size() - Used_);
+      std::memcpy(Buffer_.data() + Used_, Text.data(), Count);
+      Used_ += Count;
+      Text.remove_prefix(Count);
+    }
+  }
+
   void beginValue() {
     if (!Contexts_.empty() && !Contexts_.back().Object) {
       if (!Contexts_.back().First)
-        Out_ << ',';
+        put(',');
       Contexts_.back().First = false;
     }
   }
@@ -253,63 +292,81 @@ private:
   void attributeName(const char *Key) {
     if (!Contexts_.empty() && Contexts_.back().Object) {
       if (!Contexts_.back().First)
-        Out_ << ',';
+        put(',');
       Contexts_.back().First = false;
     }
     writeString(Key);
-    Out_ << ':';
+    put(':');
   }
 
-  static void writeStringTo(std::ostream &Out, const std::string &Value) {
-    Out << '"';
-    for (unsigned char C : Value) {
+  void writeString(std::string_view Value) {
+    static constexpr char Digits[] = "0123456789abcdef";
+    put('"');
+    size_t Begin = 0;
+    for (size_t I = 0; I < Value.size(); ++I) {
+      unsigned char C = Value[I];
+      if (C >= 0x20 && C != '"' && C != '\\')
+        continue;
+      append(Value.substr(Begin, I - Begin));
       switch (C) {
-      case '"': Out << "\\\""; break;
-      case '\\': Out << "\\\\"; break;
-      case '\b': Out << "\\b"; break;
-      case '\f': Out << "\\f"; break;
-      case '\n': Out << "\\n"; break;
-      case '\r': Out << "\\r"; break;
-      case '\t': Out << "\\t"; break;
+      case '"':
+        append("\\\"");
+        break;
+      case '\\':
+        append("\\\\");
+        break;
+      case '\b':
+        append("\\b");
+        break;
+      case '\f':
+        append("\\f");
+        break;
+      case '\n':
+        append("\\n");
+        break;
+      case '\r':
+        append("\\r");
+        break;
+      case '\t':
+        append("\\t");
+        break;
       default:
-        if (C < 0x20)
-          Out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-              << static_cast<unsigned>(C) << std::dec << std::setfill('0');
-        else
-          Out << static_cast<char>(C);
+        append("\\u00");
+        put(Digits[C >> 4]);
+        put(Digits[C & 15]);
       }
+      Begin = I + 1;
     }
-    Out << '"';
+    append(Value.substr(Begin));
+    put('"');
   }
-
-  void writeString(const std::string &Value) { writeStringTo(Out_, Value); }
-  void writeString(const char *Value) { writeString(std::string(Value)); }
 
   void writeValue(const std::string &Value) { writeString(Value); }
   void writeValue(const char *Value) { writeString(Value); }
-  void writeValue(bool Value) { Out_ << (Value ? "true" : "false"); }
+  void writeValue(bool Value) { append(Value ? "true" : "false"); }
 
   void writeValue(double Value) {
     std::ostringstream Number;
     Number.imbue(std::locale::classic());
     Number << std::setprecision(std::numeric_limits<double>::max_digits10)
            << Value;
-    Out_ << Number.str();
+    append(Number.str());
   }
 
-  template <typename T,
-            typename std::enable_if_t<std::is_integral<T>::value &&
-                                          !std::is_same<T, bool>::value,
-                                      int> = 0>
+  template <
+      typename T,
+      typename std::enable_if_t<
+          std::is_integral<T>::value && !std::is_same<T, bool>::value, int> = 0>
   void writeValue(T Value) {
-    if constexpr (std::is_signed<T>::value)
-      Out_ << static_cast<long long>(Value);
-    else
-      Out_ << static_cast<unsigned long long>(Value);
+    char Number[32];
+    auto End = std::to_chars(Number, Number + sizeof(Number), Value).ptr;
+    append(std::string_view(Number, End - Number));
   }
 
   std::ostream &Out_;
   std::vector<Context> Contexts_;
+  std::array<char, 64 * 1024> Buffer_;
+  size_t Used_ = 0;
 };
 
 inline std::string toHex(ArrayRef<uint8_t> Bytes, bool LowerCase = true) {

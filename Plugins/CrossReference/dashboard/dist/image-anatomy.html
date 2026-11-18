@@ -1898,9 +1898,10 @@ function recomputeCompression(){
     if(comp){m.compRaw+=n.size;T.compRaw+=n.size;if(n.hot){m.hotRaw+=n.size;T.hotRaw+=n.size;}
       if(e){m.eligRaw+=n.size;T.eligRaw+=n.size;const sv=n.size-s;m.saved+=sv;d.saved+=sv;T.saved+=sv;}
       else{const pot=n.size*(1-r);if(n.hot)T.untapHot+=pot;else{m.untap+=pot;T.untap+=pot;}}}}
+  const metrics={stored,proj,elig};
   (function walk(t){
-    if(t.sym){const n=t.sym;if(n.live){t.st=stored[n.i];t.pj=proj[n.i];t.eg=elig[n.i]?n.size:0;t.cp=n.kind!=='bss'?n.size:0;}else{t.st=t.pj=t.eg=t.cp=0;}return;}
-    if(t._nodes){let st=0,pj=0,eg=0,cp=0;for(const i of t._nodes){st+=stored[i];pj+=proj[i];if(elig[i])eg+=A.nodes[i].size;if(A.nodes[i].kind!=='bss')cp+=A.nodes[i].size;}t.st=st;t.pj=pj;t.eg=eg;t.cp=cp;for(const ch of t.children||[])walk(ch);return;}
+    if(t.sym){setTreeCompression(t,[t.sym.i],metrics);return;}
+    if(t._nodes){setTreeCompression(t,t._nodes,metrics);for(const ch of t.children||[])walk(ch);return;}
     let st=0,pj=0,eg=0,cp=0;for(const ch of t.children){walk(ch);st+=ch.st;pj+=ch.pj;eg+=ch.eg;cp+=ch.cp;}t.st=st;t.pj=pj;t.eg=eg;t.cp=cp;
   })(TREE);
   const ret=new Float64Array(N+1);for(const v of A.dom.order){if(v===N)continue;ret[v]+=stored[v];ret[A.dom.idom[v]]+=ret[v];}
@@ -2038,7 +2039,18 @@ function buildTree(mode=state.treeMode){
   const pick=choices=>new Map([...choices].map(([key,paths])=>{let best=null;for(const choice of paths.values())if(!best||choice.size>best.size)best=choice;return [key,best?best.path:[]];}));
   A._focusDirs=pick(dirChoices);if(kindFirst)A._focusFiles=pick(fileChoices);return root;
 }
-function makeSectionLeaf(i,parent){const n=A.nodes[i],slot=n.ki+(n.live?0:4);const leaf={key:'s:'+i,name:n.name,level:'sym',depth:parent.depth+1,k:new Float64Array(8),sym:n,mod:n.mod,dom:n.dom,_focusPath:parent._focusPath.slice(),_directLeaf:1};leaf.k[slot]=n.size;leaf.st=C?C.stored[i]:0;return leaf;}
+// Drill-down creates tiles after the initial compression walk. Give them the
+// same metrics immediately so their colors and projected sizes stay current.
+function setTreeCompression(node,ids,metrics=C){
+  node.st=node.pj=node.eg=node.cp=0;
+  if(!metrics)return;
+  for(const i of ids){const n=A.nodes[i];if(!n.live)continue;
+    node.st+=metrics.stored[i];node.pj+=metrics.proj[i];
+    if(metrics.elig[i])node.eg+=n.size;
+    if(n.kind!=='bss')node.cp+=n.size;
+  }
+}
+function makeSectionLeaf(i,parent){const n=A.nodes[i],slot=n.ki+(n.live?0:4);const leaf={key:'s:'+i,name:n.name,level:'sym',depth:parent.depth+1,k:new Float64Array(8),sym:n,mod:n.mod,dom:n.dom,_focusPath:parent._focusPath.slice(),_directLeaf:1};leaf.k[slot]=n.size;setTreeCompression(leaf,[i]);return leaf;}
 function materializeSections(node,force=false){
   if(node._materialized&&!force)return;
   const ids=node._materializeNodes!=null?node._materializeNodes:(node._nodes||[]);
@@ -2048,7 +2060,7 @@ function materializeSections(node,force=false){
   if(state.searchNode!=null&&ids.includes(state.searchNode)&&!chosen.includes(state.searchNode))chosen=chosen.concat(state.searchNode);
   const used=new Set(chosen);for(const i of chosen)node.children.push(makeSectionLeaf(i,node));
   const rest=ids.length===chosen.length?[]:ids.filter(i=>!used.has(i));
-  if(rest.length){const other={key:'a:'+node.key,name:`Other sections (${num(rest.length)})`,level:'aggregate',depth:node.depth+1,k:new Float64Array(8),_nodes:rest,mod:node.mod,dom:node.dom,_focusPath:node._focusPath.slice()};for(const i of rest){const n=A.nodes[i],slot=n.ki+(n.live?0:4);other.k[slot]+=n.size;}other.st=rest.reduce((v,i)=>v+(C?C.stored[i]:0),0);node.children.push(other);}
+  if(rest.length){const other={key:'a:'+node.key,name:`Other sections (${num(rest.length)})`,level:'aggregate',depth:node.depth+1,k:new Float64Array(8),_nodes:rest,mod:node.mod,dom:node.dom,_focusPath:node._focusPath.slice()};for(const i of rest){const n=A.nodes[i],slot=n.ki+(n.live?0:4);other.k[slot]+=n.size;}setTreeCompression(other,rest);node.children.push(other);}
   node._materialized=true;
 }
 function focusNode(){let cur=TREE;const ok=[];for(const k of state.focus){const nx=cur.children.find(c=>c.key===k);if(!nx)break;if(nx._nodes)materializeSections(nx);ok.push(k);cur=nx;}state.focus=ok;return cur;}
@@ -2163,7 +2175,7 @@ function groupDominantSymbols(node,meas){
   const total=ranked.reduce((sum,c)=>sum+V(c,meas),0),dominant=ranked[0],rest=symbols.filter(c=>c!==dominant);
   if(!total||V(dominant,meas)/total<DOMINANT_SHARE||!rest.length)return;
   const ids=rest.map(c=>c.sym.i),other={key:'a:dominant:'+node.key,name:`Other symbols (${num(rest.length)})`,level:'aggregate',depth:node.depth+1,k:new Float64Array(8),_nodes:ids,mod:node.mod,dom:node.dom,_focusPath:node._focusPath.slice(),_dominantRemainder:true};
-  let st=0;for(const i of ids){const n=A.nodes[i],slot=n.ki+(n.live?0:4);other.k[slot]+=n.size;st+=C?C.stored[i]:0;}other.st=st;
+  for(const i of ids){const n=A.nodes[i],slot=n.ki+(n.live?0:4);other.k[slot]+=n.size;}setTreeCompression(other,ids);
   node.children=[dominant,other];node._dominantGrouped=true;
 }
 function displayChildren(node,meas){
