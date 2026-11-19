@@ -275,11 +275,17 @@ caches only the current reference query rather than a second full object graph.
 ## What the dashboard derives
 
 - **Top-level directory**: the first directory of the path. **Subsystem**: the first two. Treemap levels follow the full directory path, then file, then class or scope, then section.
-- **Roots**: if none are marked, every live section no other live section refers to.
+- **Roots**: live sections matched by `root_symbols` or `KEEP`. If none are
+  marked, the dashboard treats every live section no other live section refers
+  to as a root.
 - **Startup plumbing**: roots, `main`, names ending in `init` or `start`, and any section keeping more than a fifth of the image alive. Their references are left out of dependency layering, and they never count as the single owner of a blob.
 - **Hot code**: if no section is marked hot, shared infrastructure stands in for it in the compression view.
 - **Eliminated code** comes only from the eliminated flag; it is never inferred from reachability.
-- **Compressed**: a live, non-bss section whose output section matches the compression patterns. Stored size is raw size times the code or data ratio; bss is always stored at full size.
+- **Compressed**: a live section whose output section matches the compression
+  patterns. Stored size is raw size times the code ratio for code, or the data
+  ratio for read-only, initialized and zero-initialized data (BSS). Compressed
+  BSS contributes to savings and appears green and hatched in the treemap;
+  BSS outside matching output sections retains its full size.
 
 ## Where the plugin gets each field (ELD)
 
@@ -287,8 +293,12 @@ caches only the current reference query rather than a second full object graph.
 - **References**: the relocations of each input section, resolved to their target section. Section-relative relocations (section symbol plus addend) should be resolved to the section that actually holds the addend. References from discarded sections are still useful (they feed unused-island detection).
 - **Eliminated flag**: read after garbage collection. Discarded COMDAT duplicates can be left out or emitted as eliminated.
 - **Output section and final size**: read as late as possible, after layout and relaxation, so trampolines and relaxed sizes are final.
-- **Roots**: the entry symbol, vector tables, and sections kept by `KEEP` in the linker script.
-- **Addresses and alignment**: each input section's output address and alignment, read after layout at the same point as final sizes. Region starts and sizes come from the linker script's `MEMORY` block.
+- **Roots**: raw ELF symbols selected by `root_symbols`, and live sections kept
+  by `KEEP` in the linker script. Include the entry symbol and known vector or
+  startup symbols in `root_symbols` when needed.
+- **Addresses and alignment**: each input section's output address and alignment,
+  read after layout at the same point as final sizes. Region starts and sizes
+  come from explicit `region=name,start,size` options.
 - **Hot**: not known to the linker. Add it from profiling or trace data if available, or from a list of hot functions.
 
 ### Producer configuration and compatibility
@@ -300,11 +310,11 @@ Final addresses come from input-owned chunks retained in output rules;
 eliminated/empty sections and merged or noncontiguous extents without a
 reliable section start use `-1`.
 
-Current ELD exposes evaluated memory regions and the resolved entry and
-explicit undefined/export-dynamic symbol roots through its public plugin API.
-Exports mark these roots and `KEEP` sections only when live. On older SDKs,
-`region=name,start,size` and `root_symbols=glob,...` supply known metadata.
-Explicit regions override automatic entries with the same name.
+`region=name,start,size` and `root_symbols=glob,...` supply known memory
+regions and root symbols. Regions are omitted unless configured. Exports mark
+matching raw ELF symbols and `KEEP` sections as roots only when live; entry
+and undefined/export-dynamic symbol roots are not inferred automatically.
+Root annotations do not change garbage collection.
 
 Optional `title`, `compression_patterns`, `compression_code_ratio`,
 `compression_data_ratio` and `compression_buffer_bytes` configure the common

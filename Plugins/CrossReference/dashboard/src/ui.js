@@ -31,8 +31,11 @@ function recomputeCompression(){
   const wiM=new Set(),wiN=new Set();for(const k of state.whatIf){const [t,v]=k.split(':');(t==='m'?wiM:wiN).add(+v);}
   const M=A.mods.map(()=>({raw:0,stored:0,eligRaw:0,compRaw:0,saved:0,untap:0,hotRaw:0,proj:0}));const D=A.doms.map(()=>({raw:0,stored:0,proj:0,saved:0}));
   const T={raw:0,stored:0,eligRaw:0,compRaw:0,saved:0,untap:0,untapHot:0,proj:0,hotSkipped:0,hotRaw:0};
-  for(const n of A.nodes){if(!n.live)continue;const i=n.i;const comp=n.kind!=='bss';const e=comp&&match(n.out);elig[i]=e?1:0;
-    const r=comp?(n.kind==='code'?state.comp.cr:state.comp.dr):1;const s=e?n.size*r:n.size;stored[i]=s;
+  for(const n of A.nodes){if(!n.live)continue;const i=n.i;const e=match(n.out);elig[i]=e?1:0;
+    // BSS in a compressed output section occupies compressed RAM and follows
+    // the data ratio. Ordinary BSS retains its full size.
+    const comp=n.kind!=='bss'||e;
+    const r=n.kind==='code'?state.comp.cr:state.comp.dr;const s=e?n.size*r:n.size;stored[i]=s;
     let p=s;if(!e&&comp&&(wiM.has(n.mi)||wiN.has(i))){if(n.hot)T.hotSkipped++;else p=n.size*r;}proj[i]=p;
     const m=M[n.mi],d=D[n.di];m.raw+=n.size;m.stored+=s;m.proj+=p;d.raw+=n.size;d.stored+=s;d.proj+=p;T.raw+=n.size;T.stored+=s;T.proj+=p;
     if(comp){m.compRaw+=n.size;T.compRaw+=n.size;if(n.hot){m.hotRaw+=n.size;T.hotRaw+=n.size;}
@@ -42,7 +45,7 @@ function recomputeCompression(){
   (function walk(t){
     if(t.sym){setTreeCompression(t,[t.sym.i],metrics);return;}
     if(t._nodes){setTreeCompression(t,t._nodes,metrics);for(const ch of t.children||[])walk(ch);return;}
-    let st=0,pj=0,eg=0,cp=0;for(const ch of t.children){walk(ch);st+=ch.st;pj+=ch.pj;eg+=ch.eg;cp+=ch.cp;}t.st=st;t.pj=pj;t.eg=eg;t.cp=cp;
+    let st=0,pj=0,eg=0,cp=0,cb=0;for(const ch of t.children){walk(ch);st+=ch.st;pj+=ch.pj;eg+=ch.eg;cp+=ch.cp;cb+=ch.cb;}t.st=st;t.pj=pj;t.eg=eg;t.cp=cp;t.cb=cb;
   })(TREE);
   const ret=new Float64Array(N+1);for(const v of A.dom.order){if(v===N)continue;ret[v]+=stored[v];ret[A.dom.idom[v]]+=ret[v];}
   const ov=(T.eligRaw>0||T.proj<T.stored)?Math.max(0,+state.comp.ov||0)*MIB:0;
@@ -182,12 +185,14 @@ function buildTree(mode=state.treeMode){
 // Drill-down creates tiles after the initial compression walk. Give them the
 // same metrics immediately so their colors and projected sizes stay current.
 function setTreeCompression(node,ids,metrics=C){
-  node.st=node.pj=node.eg=node.cp=0;
+  node.st=node.pj=node.eg=node.cp=node.cb=0;
   if(!metrics)return;
   for(const i of ids){const n=A.nodes[i];if(!n.live)continue;
     node.st+=metrics.stored[i];node.pj+=metrics.proj[i];
     if(metrics.elig[i])node.eg+=n.size;
-    if(n.kind!=='bss')node.cp+=n.size;
+    if(n.kind!=='bss'||metrics.elig[i])node.cp+=n.size;
+    // Compressed BSS is included in eg/cp; cb identifies its hatched share.
+    if(n.kind==='bss'&&metrics.elig[i])node.cb+=n.size;
   }
 }
 function makeSectionLeaf(i,parent){const n=A.nodes[i],slot=n.ki+(n.live?0:4);const leaf={key:'s:'+i,name:n.name,level:'sym',depth:parent.depth+1,k:new Float64Array(8),sym:n,mod:n.mod,dom:n.dom,_focusPath:parent._focusPath.slice(),_directLeaf:1};leaf.k[slot]=n.size;setTreeCompression(leaf,[i]);return leaf;}
@@ -368,10 +373,11 @@ function renderTreemap(){
     const c=d3.color(domColor(domIdx(r)));const sib=d.parent?d.parent.children.indexOf(d):0;const adj=r.level==='sym'?{code:0,rodata:.55,data:-.35,bss:.95}[r.sym.kind]:((sib%3)-1)*0.28;
     return (adj>=0?c.brighter(adj):c.darker(-adj)).formatHex();};
   const leaves=h.leaves().filter(d=>d.x1-d.x0>0&&d.y1-d.y0>0);
+  const bssInfo=r=>r.cb?`<br>${fmtB(r.cb)} of zero-initialized data in compressed output sections, stored at ${Math.round(state.comp.dr*100)}% of raw size`:'';
   const tipFor=d=>{const r=d.data.ref;const live=val(r.k,'live'),dead=val(r.k,'dead');
-    if(r.level==='sym'){const n=r.sym;return `<strong>${esc(n.name)}</strong><br>${esc(n.path)}<br>${KIND_NAME[n.kind]}, ${fmtB(n.size)}${n.live?(C.elig[n.i]?`, stored compressed as ${fmtB(C.stored[n.i])}`:''):', eliminated by the linker'}<br>Output section: ${n.out?esc(n.out):'Not provided in export'}${n.hot?'<br>Hot path':''}`+(n.live&&C.ret[n.i]>C.stored[n.i]*1.2?`<br>Keeps ${fmtB(C.ret[n.i])} stored in RAM`:'');}
-    if(r.level==='aggregate')return `<strong>${esc(r.name)}</strong><br>${num(r._nodes.length)} ${r._dominantRemainder?'smaller symbols grouped to keep the dominant symbol visible':'sections grouped for readability'}<br>${fmtB(r.st)} stored in RAM, ${fmtB(live)} raw, ${fmtB(dead)} eliminated`;
-    return `<strong>${esc(r.name)}</strong><br>${fmtB(r.st)} stored in RAM, ${fmtB(live)} raw${r.cp?`, ${pctS(r.eg,r.cp)} of the compressible bytes compressed`:''}<br>${fmtB(dead)} eliminated (${pctS(dead,live+dead)} of input)`;};
+    if(r.level==='sym'){const n=r.sym;return `<strong>${esc(n.name)}</strong><br>${esc(n.path)}<br>${KIND_NAME[n.kind]}, ${fmtB(n.size)}${n.live?(C.elig[n.i]?`, stored compressed as ${fmtB(C.stored[n.i])}`:''):', eliminated by the linker'}<br>Output section: ${n.out?esc(n.out):'Not provided in export'}${bssInfo(r)}${n.hot?'<br>Hot path':''}`+(n.live&&C.ret[n.i]>C.stored[n.i]*1.2?`<br>Keeps ${fmtB(C.ret[n.i])} stored in RAM`:'');}
+    if(r.level==='aggregate')return `<strong>${esc(r.name)}</strong><br>${num(r._nodes.length)} ${r._dominantRemainder?'smaller symbols grouped to keep the dominant symbol visible':'sections grouped for readability'}<br>${fmtB(r.st)} stored in RAM, ${fmtB(live)} raw, ${fmtB(dead)} eliminated${bssInfo(r)}`;
+    return `<strong>${esc(r.name)}</strong><br>${fmtB(r.st)} stored in RAM, ${fmtB(live)} raw${r.cp?`, ${pctS(r.eg,r.cp)} of the compressible bytes compressed`:''}<br>${fmtB(dead)} eliminated (${pctS(dead,live+dead)} of input)${bssInfo(r)}`;};
   const onClick=d=>{const r=d.data.ref;
     // The displayed hierarchy deliberately flattens singleton files and
     // dominant files.  A D3 leaf's parent is therefore often a module, not
@@ -386,6 +392,14 @@ function renderTreemap(){
     renderAll();};
   svg.append('g').selectAll('rect').data(leaves).join('rect').attr('class',d=>`tm-leaf${searchHit(d.data.ref)?' tm-search-hit':''}`).attr('x',d=>d.x0).attr('y',d=>d.y0).attr('width',d=>d.x1-d.x0).attr('height',d=>d.y1-d.y0).attr('fill',fill)
     .on('mousemove',(ev,d)=>tipShow(tipFor(d),ev)).on('mouseleave',tipHide).on('click',(ev,d)=>onClick(d));
+  if(state.colorBy==='comp'){
+    svg.append('defs').append('pattern').attr('id','tmCompressedBss').attr('patternUnits','userSpaceOnUse').attr('width',8).attr('height',8)
+      .append('path').attr('d','M-2,2L2,-2M0,8L8,0M6,10L10,6').attr('stroke','#fff').attr('stroke-width',1.5);
+    // Mixed tiles retain the color of their other bytes. Fade the hatching in
+    // proportion to the live BSS bytes in matching output sections.
+    svg.append('g').attr('pointer-events','none').selectAll('rect').data(leaves.filter(d=>d.data.ref.cb>0)).join('rect').attr('class','tm-compressed-bss')
+      .attr('x',d=>d.x0).attr('y',d=>d.y0).attr('width',d=>d.x1-d.x0).attr('height',d=>d.y1-d.y0).attr('fill','url(#tmCompressedBss)').attr('opacity',d=>0.55*d.data.ref.cb/val(d.data.ref.k,'live'));
+  }
   svg.append('g').selectAll('text').data(leaves.filter(d=>tmFontSize(d,'leaf')>0)).join('text').attr('class','tm-leaf-label').attr('x',d=>d.x0+4).attr('y',d=>d.y0+tmFontSize(d,'leaf')+2).style('font-size',d=>`${tmFontSize(d,'leaf')}px`).style('fill',d=>d3.hsl(fill(d)).l>0.62?'#16202A':'#fff')
     .text(d=>{const r=d.data.ref;const s=r.level==='sym'?shortName(r.name):r.name;return tmLabel(s,d.x1-d.x0-8,tmFontSize(d,'leaf'),8);});
   // second-level outlines and labels
@@ -412,7 +426,7 @@ function renderTreemap(){
   else if(kids.length)t=`The largest part of ${F.name} is ${nm(kids[0])}, at ${fmtB(kids[0].value)} (${pctS(kids[0].value,h.value)}).`;
   $('#tmTake').textContent=t;
   $('#tmLegend').innerHTML=state.colorBy==='kind'?KINDS.map(k=>`<span><i style="background:${KIND_COL[k]}"></i>${KIND_NAME[k]}</span>`).join('')
-    :state.colorBy==='comp'?`<span class="ramp"><i style="background:linear-gradient(90deg,${COMP_LO},${COMP_HI})"></i>Share of the compressible bytes that are compressed, from none to all</span><span><i style="background:${COMP_NONE}"></i>Zero-initialized data (bss); mixed tiles are greyed in proportion</span>`
+    :state.colorBy==='comp'?`<span class="ramp"><i style="background:linear-gradient(90deg,${COMP_LO},${COMP_HI})"></i>Compressible bytes: uncompressed to compressed</span><span><i class="hatch" style="background-color:${COMP_HI}"></i>BSS in compressed output sections</span><span><i style="background:${COMP_NONE}"></i>BSS outside compressed output sections; mixed tiles blend by size</span>`
     :state.colorBy==='dead'?`<span class="ramp"><i style="background:linear-gradient(90deg,${DEAD_LO},${DEAD_HI})"></i>Share of the linker input that is eliminated, from none to all</span>`
     :`<span class="hint">Color is the top-level directory. Shades separate neighbouring subsystems.</span>`;
 }
@@ -485,7 +499,7 @@ function renderAddrMap(){
   const rows=Math.ceil(span/rowBytes),rowH=Math.max(3,Math.min(8,Math.floor(560/rows))),H=rows*rowH,bpp=rowBytes/cols;
   const mode=state.addrColor,outIndex=new Map(L.outs.map((o,i)=>[o.name,i])),PAD=cssVar('--ink-3'),FREE=cssVar('--surface'),SEL=cssVar('--accent');
   const colorOf=n=>n.mod===state.selected?SEL:mode==='out'?PALETTE[outIndex.get(n.out||'(none)')%PALETTE.length]
-    :mode==='comp'?(n.kind==='bss'?COMP_NONE:C.elig[n.i]?COMP_HI:COMP_LO):domColor(A.doms.findIndex(d=>d.name===n.dom));
+    :mode==='comp'?(C.elig[n.i]?COMP_HI:n.kind==='bss'?COMP_NONE:COMP_LO):domColor(A.doms.findIndex(d=>d.name===n.dom));
   // One sample per point: the section at the middle address of the bytes it covers.
   const img=new ImageData(cols,rows),rgb=new Map(),put=(p,c)=>{let v=rgb.get(c);if(!v){const x=d3.color(c).rgb();rgb.set(c,v=[x.r,x.g,x.b]);}img.data.set(v,p*4);img.data[p*4+3]=255;};
   const domCache=new Map(),colorCached=n=>{const k=n.i;if(!domCache.has(k))domCache.set(k,colorOf(n));return domCache.get(k);};
@@ -516,7 +530,7 @@ function renderAddrMap(){
   $('#addrTake').textContent=take;canvas.setAttribute('aria-label','Address map. '+take+' The table below lists each output section.');
   const sw=c=>`<i style="background:${c}"></i>`;
   $('#addrLegend').innerHTML=(mode==='out'?L.outs.map((o,i)=>`<span>${sw(PALETTE[i%PALETTE.length])}${esc(o.name)}</span>`).join('')
-    :mode==='comp'?`<span>${sw(COMP_HI)}Compressed</span><span>${sw(COMP_LO)}Not compressed</span><span>${sw(COMP_NONE)}Zero-initialized</span>`
+    :mode==='comp'?`<span>${sw(COMP_HI)}Compressed</span><span>${sw(COMP_LO)}Not compressed</span><span>${sw(COMP_NONE)}BSS outside compressed output sections</span>`
     :`<span class="hint">Color is the top-level directory.</span>`)+`<span>${sw(SEL)}Selected subsystem</span><span>${sw(PAD)}Padding</span><span>${sw(FREE)}Unused</span>`;
   $('#addrTable').innerHTML=`<thead><tr><th>Output section</th><th>Start</th><th>End</th><th>Size</th><th>Alignment padding</th><th>Sections</th></tr></thead><tbody>`+
     L.outs.map(o=>`<tr><td>${esc(o.name)}</td><td><code>${hexA(o.start)}</code></td><td><code>${hexA(o.end)}</code></td><td>${fmtB(o.end-o.start)}</td><td>${fmtB(o.pad)}</td><td>${num(o.count)}</td></tr>`).join('')+'</tbody>';

@@ -420,7 +420,7 @@ public:
         continue;
       }
       if (Key == "region") {
-        // Repeatable fallback for SDKs without evaluated MEMORY access.
+        // Repeatable explicit metadata for the dashboard's memory regions.
         size_t First = Value.find(','), Last = Value.rfind(',');
         uint64_t Start = 0, Size = 0;
         if (First == std::string::npos || First == 0 || First == Last ||
@@ -1150,25 +1150,6 @@ private:
       if (Sym && !Sym.isUndef() && Sym.getChunk())
         RootSections.insert(Sym.getChunk().getSection());
     };
-#ifdef ELD_PLUGIN_HAS_IMAGE_METADATA
-    for (const Symbol &Sym : getLinker()->getExplicitRootSymbols())
-      AddRoot(Sym);
-    auto Evaluated = getLinker()->getImageMemoryRegions();
-    if (!Evaluated) {
-      HasError = true;
-      getLinker()->reportDiagEntry(std::move(Evaluated.error()));
-      return;
-    }
-    for (const auto &R : Evaluated.value()) {
-      if (R.Start > MaxJSONInteger || R.Size > MaxJSONInteger - R.Start) {
-        optionError("MEMORY region exceeds the JSON safe-integer range",
-                    R.Name);
-        return;
-      }
-      // Explicit regions override the same named linker region.
-      Regions.emplace(R.Name, MemoryRegion{R.Start, R.Size});
-    }
-#endif
     for (const Symbol &Sym : AllSymbols)
       for (const auto &Pattern : RootSymbolPatterns)
         if (Pattern.match(Sym.getName())) {

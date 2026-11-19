@@ -49,17 +49,11 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/${_check}.js")
   endforeach()
   if(ELD_STANDALONE AND TARGET CrossReference)
-    set(_metadata_args)
-    file(STRINGS "${ELD_INCLUDE_DIR}/LinkerWrapper.h" _metadata_api
-      REGEX "^#define ELD_PLUGIN_HAS_IMAGE_METADATA +1")
-    if(_metadata_api)
-      list(APPEND _metadata_args --automatic-metadata)
-    endif()
     eld_add_standalone_test(
       NAME CrossReferenceDashboard TARGET CrossReference
       SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/../test/dashboard_test.py"
       ARGS --node "${CROSSREFERENCE_DASHBOARD_NODE}"
-        --output-dir "${CMAKE_CURRENT_BINARY_DIR}/exports" ${_metadata_args})
+        --output-dir "${CMAKE_CURRENT_BINARY_DIR}/exports")
     add_dependencies(check-crossreference-dashboard CrossReference)
     add_custom_command(TARGET check-crossreference-dashboard POST_BUILD
       COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${CMAKE_BINARY_DIR}"
@@ -69,8 +63,7 @@ if(BUILD_TESTING)
   endif()
 endif()
 
-# The in-tree producer uses the new evaluated metadata APIs. The installed
-# SDK fixture above also verifies the explicit region/root fallback.
+# Both in-tree and installed-SDK fixtures use explicit region/root options.
 if(NOT ELD_STANDALONE AND TARGET CrossReference AND TARGET ld.eld)
   find_package(Python3 QUIET COMPONENTS Interpreter)
   find_program(CROSSREFERENCE_DASHBOARD_CXX NAMES clang++)
@@ -89,7 +82,6 @@ if(NOT ELD_STANDALONE AND TARGET CrossReference AND TARGET ld.eld)
         --target-cxx "${CROSSREFERENCE_DASHBOARD_CXX}"
         --target-ld "$<TARGET_FILE:ld.eld>"
         --target-triple "${ELD_DEFAULT_TARGET_TRIPLE}"
-        --automatic-metadata
       DEPENDS CrossReference ld.eld
       USES_TERMINAL VERBATIM)
     add_dependencies(check-crossreference-dashboard CrossReferenceDashboardExportCheck)

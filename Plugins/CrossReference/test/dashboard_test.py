@@ -42,7 +42,6 @@ def main():
     parser = argument_parser(__doc__)
     parser.add_argument("--node", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--automatic-metadata", action="store_true")
     args = parser.parse_args()
     env = runtime_environment(args)
     exports = Path(args.output_dir).resolve()
@@ -126,8 +125,7 @@ SECTIONS {
                            "title=Dashboard fixture:compression_patterns=.text:"
                            "compression_code_ratio=0.25:compression_data_ratio=0.5:"
                            "compression_buffer_bytes=4096:root_symbols=unused_*").format(suffix, fmt, details, work)
-                if not args.automatic_metadata:
-                    options += ":region=CODE,65536,32768:region=RAM,2097152,16384:root_symbols=main,forced_root"
+                options += ":region=CODE,65536,32768:region=RAM,2097152,16384:root_symbols=main,forced_root"
                 if details != "none":
                     options += ":fragment_details=data"
                 config = work / "plugins.yaml"
@@ -154,7 +152,8 @@ SECTIONS {
 
         # Omission and invalid settings are part of the producer contract.
         def export(extra, succeeds=True, entry="main", link_script=script,
-                   fmt="json", configuration=None, suffix=None, image=None):
+                   fmt="json", configuration=None, suffix=None, image=None,
+                   link_flags=()):
             image = image or work / "image.out"
             image.parent.mkdir(parents=True, exist_ok=True)
             output = Path(str(image) + "." + (suffix or "crossref") + ".json")
@@ -172,6 +171,7 @@ SECTIONS {
             command = [args.target_ld] + args.target_ld_args + args.target_ld_arg + objects
             command += ["--gc-sections", "-T", str(link_script), "-e", entry,
                         "-o", str(image), "--plugin-config", str(config)]
+            command += list(link_flags)
             result = subprocess.run(command, cwd=work, env=env, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             if succeeds:
@@ -194,6 +194,10 @@ SECTIONS {
             details = document["symbolDetails"]
             assert details["sourceFiles"] and any(line > 0 for line in details["symbols"]["sourceLine"])
             assert 1 in details["initializerFragments"]["refs"]["class"]
+            assert "regions" not in document
+            sections = document["sections"]
+            assert not sections["flags"][sections["name"].index("main")] & 2, "Entry roots require root_symbols"
+            assert sections["flags"][sections["name"].index("vector_table")] & 2, "Live KEEP sections remain roots"
 
         defaults = export("", fmt=None)
         check_defaults(defaults)
@@ -221,21 +225,26 @@ SECTIONS {
         export(":symbol_details=none:fragment_details=data", succeeds=False)
         assert "title" not in plain and "compression" not in plain
         assert all("class" not in n for n in plain["nodes"])
-        assert ("regions" in plain) == args.automatic_metadata
-        if args.automatic_metadata:
-            alternate = export("", entry="alternate_entry")
-            assert next(n for n in alternate["nodes"] if n["name"] == "alternate_entry").get("root")
-            assert not next(n for n in alternate["nodes"] if n["name"] == "main").get("root", False)
-            absent = work / "absent.ld"
-            absent.write_text("SECTIONS { . = 0x10000; .text : { *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) } }")
-            assert "regions" not in export("", link_script=absent)
-            if "aarch64" in args.target_triple:
-                unsafe = work / "unsafe.ld"
-                unsafe.write_text(absent.read_text().replace("0x10000", "0x20000000000000"))
-                export("", succeeds=False, link_script=unsafe)
-        override = export(":region=CODE,65536,4096:compression_code_ratio=0:compression_buffer_bytes=0")
-        assert override["regions"]["CODE"]["size"] == 4096
-        assert override["compression"] == {"codeRatio": 0, "decompressBufferBytes": 0}
+        assert "regions" not in plain, "MEMORY regions require explicit region options"
+        assert not next(n for n in plain["nodes"] if n["name"] == "main").get("root", False)
+        assert next(n for n in plain["nodes"] if n["name"] == "vector_table").get("root")
+        alternate = export("", entry="alternate_entry")
+        assert not next(n for n in alternate["nodes"] if n["name"] == "alternate_entry").get("root", False)
+        annotated = export(":root_symbols=alternate_*,unused_*", entry="alternate_entry")
+        assert next(n for n in annotated["nodes"] if n["name"] == "alternate_entry").get("root")
+        assert not next(n for n in annotated["nodes"] if n["name"] == "unused_function").get("root", False)
+        forced = export("", link_flags=("-u", "forced_root"))
+        forced_symbol = next(n for n in forced["nodes"] if n["name"] == "forced_root")
+        assert forced_symbol.get("live", True) and not forced_symbol.get("root", False), "Undefined symbol requests do not add root annotations"
+        raw_pattern = export(":root_symbols=_ZN4demo16operator_helpers*")
+        assert next(n for n in raw_pattern["nodes"] if n["name"] == "demo::operator_helpers::read()").get("root"), "Root globs match raw ELF names before demangling"
+        if "aarch64" in args.target_triple:
+            unsafe = work / "unsafe.ld"
+            unsafe.write_text("SECTIONS { . = 0x20000000000000; .text : { *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) } }")
+            export("", succeeds=False, link_script=unsafe)
+        explicit = export(":region=CODE,65536,4096:compression_code_ratio=0:compression_buffer_bytes=0")
+        assert explicit["regions"] == {"CODE": {"start": 65536, "size": 4096}}
+        assert explicit["compression"] == {"codeRatio": 0, "decompressBufferBytes": 0}
         for invalid in (":output_suffix=", ":output_suffix=subdir/report",
                         ":output_suffix=subdir\\report",
                         ":output_suffix=first:output_suffix=second",

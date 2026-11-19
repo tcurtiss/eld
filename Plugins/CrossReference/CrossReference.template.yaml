@@ -44,13 +44,14 @@
 # Dashboard build metadata (JSON only)
 #   title=<text>                         default: unset
 #     Image/build label; the dashboard uses the loaded filename when omitted.
-#   region=<name>,<start>,<size>          default: automatic when available
+#   region=<name>,<start>,<size>          default: unset
 #     Repeat this option for multiple unique names. Start and size are decimal
-#     byte values, e.g. region=RAM,2147483648,536870912. Explicit entries override
-#     automatic MEMORY regions with the same name; useful for older ELD SDKs.
-#   root_symbols=<globs>                 default: no additional annotations
+#     byte values, e.g. region=RAM,2147483648,536870912. MEMORY regions are not
+#     inferred automatically.
+#   root_symbols=<globs>                 default: unset (KEEP sections are roots)
 #     Mark matching RAW ELF symbol names as roots, e.g. Reset_Handler,vector_*.
-#     This annotates live sections and never changes garbage collection.
+#     Include the entry symbol explicitly when needed. This annotates live
+#     sections and never changes garbage collection.
 #   compression_patterns=<patterns>      default: unset
 #     Output-section eligibility globs, e.g. .text.z,.data.z. The dashboard
 #     accepts commas or spaces; its fallback pattern is .*clade*.
@@ -84,9 +85,9 @@
 #   exclude_intra_file=yes|no            default: no
 #     Omit references whose endpoints belong to the same resolved object file.
 #
-# Available section addresses/alignment are exported automatically. ELD plugin
-# API 4.1 also exports evaluated MEMORY regions and entry/explicit symbol roots;
-# KEEP sections are roots too. Root/region options supplement this metadata.
+# Available section addresses/alignment and live KEEP roots are exported
+# automatically. Use region and root_symbols to supply memory regions and
+# other roots, including the entry symbol.
 #
 # Multiline example: explicitly shows the dashboard defaults and enables gzip.
 # Add source_root=/your/build/root: before the last option to clean paths.

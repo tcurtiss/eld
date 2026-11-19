@@ -180,9 +180,9 @@ on macOS, or PATH on Windows. CTest arranges these paths automatically.
 ## Configuration
 
 The plugin is configured through a colon-delimited `key=value` option string.
-The `file` option is required. A file-only configuration now defaults to
-columnar dashboard JSON with demangled names, DWARF symbol details, data
-initializer metadata, and unary directory coalescing.
+All options are optional. An empty option string defaults to columnar
+dashboard JSON with demangled names, DWARF symbol details, data initializer
+metadata, and unary directory coalescing.
 
 Copy [`CrossReference.template.yaml`](CrossReference.template.yaml) for a
 complete option reference and a working multiline example. Whitespace around
@@ -596,20 +596,20 @@ chains in `strings.scopes` and reference them through `sections.scope`, while
 and equivalent `class`. Template arguments, function parameters and operator
 names remain intact. The columnar schema version stays **1**.
 
-ELD plugin API **4.1** (built from this source) automatically exports evaluated named `MEMORY`
-regions and marks the resolved entry and explicitly requested undefined or
-export-dynamic symbols as roots, as well as sections matched by `KEEP`.
-The older installed SDK still builds; supply `region` and `root_symbols` when
-its API cannot report regions or entry/explicit symbol roots. Root annotations
-never keep a section alive or override linker garbage collection.
+Use `region` to supply named memory regions and `root_symbols` to annotate
+entry, vector/startup, or other known root symbols. Live sections matched by
+`KEEP` are also marked as roots. Entry and undefined/export-dynamic symbol
+roots and evaluated `MEMORY` regions are not inferred through optional plugin
+APIs. Root annotations never keep a section alive or override linker garbage
+collection.
 
 The following optional colon-delimited settings apply to either JSON format:
 
 | Option | Meaning |
 |---|---|
 | `title=<text>` | Image/build label. Omitted by default. As with all options, text cannot contain a colon. |
-| `region=<name>,<start>,<size>` | Repeatable region metadata using non-negative decimal byte values. Names must be unique; explicit metadata overrides an automatic region with the same name. |
-| `root_symbols=<glob>,...` | Additional root annotations, matched against raw ELF symbol names. Use this for known vector/startup symbols or the older SDK's entry symbol. |
+| `region=<name>,<start>,<size>` | Repeatable explicit region metadata using non-negative decimal byte values. Names must be unique. Omitted by default. |
+| `root_symbols=<glob>,...` | Root annotations matched against raw ELF symbol names. Use this for the entry symbol or known vector/startup symbols. Omitted by default; live `KEEP` sections are still roots. |
 | `compression_patterns=<patterns>` | Dashboard compression eligibility globs. |
 | `compression_code_ratio=<number>` | Estimated stored/raw code ratio, finite and between 0 and 1. |
 | `compression_data_ratio=<number>` | Estimated stored/raw data ratio, finite and between 0 and 1. |
@@ -619,7 +619,7 @@ Compression metadata is omitted unless configured; only specified fields are
 written. These are build estimates, not measured compressed sizes. The
 consumer supplies its existing defaults for omitted fields.
 
-For example, a columnar export configured for an older SDK might use:
+For example, a columnar export with explicit regions and roots might use:
 
 ```text
 output_suffix=crossref:format=json_columnar:gzip=yes:cpp_demangle=yes:title=firmware r123:region=RAM,2147483648,536870912:root_symbols=Reset_Handler,vector_table:compression_patterns=.text.z,.data.z:compression_code_ratio=0.3:compression_data_ratio=0.5:compression_buffer_bytes=4096

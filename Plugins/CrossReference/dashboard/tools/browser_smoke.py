@@ -55,16 +55,29 @@ DETAIL_SAMPLE['symbolDetails']['symbols'][0].update(linkageName='_Z5entryv', sou
 DETAIL_SAMPLE['symbolDetails']['symbols'][2].update(sourceFile=1, sourceLine=11)
 
 # A large compressed object is promoted out of its file on drill-down. Its
-# remainder mixes compressed data, ordinary data, bss, and an eliminated node.
+# remainder mixes compressed data, ordinary data, BSS in a compressed output
+# section, and an eliminated node. Compressed BSS must use the data ratio.
 COMPRESSION_SAMPLE = {
     "nodes": [
         {"id": 0, "name": "modem_heap_block", "path": "modem/heap/heap.o", "kind": "data", "size": 53 * 1048576, "root": True, "out": ".region_clade2"},
         {"id": 1, "name": "compressed_tail", "path": "modem/heap/heap.o", "kind": "data", "size": 4096, "out": ".region_clade2"},
         {"id": 2, "name": "ordinary_tail", "path": "modem/heap/heap.o", "kind": "data", "size": 4096, "out": ".data"},
-        {"id": 3, "name": "zero_tail", "path": "modem/heap/heap.o", "kind": "bss", "size": 8192, "out": ".bss"},
+        {"id": 3, "name": "zero_tail", "path": "modem/heap/heap.o", "kind": "bss", "size": 8192, "out": ".region_clade2"},
         {"id": 4, "name": "eliminated_tail", "path": "modem/heap/heap.o", "kind": "data", "size": 32 * 1048576, "live": False, "out": ".data"},
     ],
     "edges": [{"src": 0, "dst": i} for i in range(1, 4)],
+}
+
+BSS_COMPRESSION_SAMPLE = {
+    "nodes": [
+        {"id": 0, "name": "clade_bss_block", "path": "modem/heap/bss.o", "kind": "bss", "size": 65536, "root": True, "out": ".region_clade2"},
+        {"id": 1, "name": "ordinary_bss_block", "path": "modem/heap/bss.o", "kind": "bss", "size": 32768, "out": ".bss"},
+        {"id": 2, "name": "missing_output_bss", "path": "modem/heap/bss.o", "kind": "bss", "size": 16384},
+        {"id": 3, "name": "eliminated_clade_bss", "path": "modem/heap/bss.o", "kind": "bss", "size": 16384, "live": False, "out": ".region_clade2"},
+        {"id": 4, "name": "initialized_clade", "path": "modem/heap/bss.o", "kind": "data", "size": 32768, "out": ".region_clade2"},
+        {"id": 5, "name": "ordinary_data", "path": "modem/heap/bss.o", "kind": "data", "size": 4096, "out": ".data"},
+    ],
+    "edges": [{"src": 0, "dst": i} for i in (1, 2, 4, 5)],
 }
 
 
@@ -93,6 +106,13 @@ async def main(args):
     compression_obj = os.path.join(tmp, "compression.objects.json")
     with open(compression_obj, "w") as f:
         json.dump(COMPRESSION_SAMPLE, f)
+    bss_compression_obj = os.path.join(tmp, "bss-compression.objects.json")
+    bss_compression_col = os.path.join(tmp, "bss-compression.columnar.json.gz")
+    with open(bss_compression_obj, "w") as f:
+        json.dump(BSS_COMPRESSION_SAMPLE, f)
+    run(["node", "-e", "const fs=require('fs'),{gzipSync}=require('zlib'),{toColumnar}=require('./src/core.js');"
+         "fs.writeFileSync(process.argv[2],gzipSync(JSON.stringify(toColumnar(JSON.parse(fs.readFileSync(process.argv[1]))))));",
+         bss_compression_obj, bss_compression_col])
     run(["node", "-e", "const fs=require('fs'),{toColumnar}=require('./src/core.js');"
          "fs.writeFileSync(process.argv[2],JSON.stringify(toColumnar(JSON.parse(fs.readFileSync(process.argv[1])))));",
          details_obj, details_col])
@@ -687,14 +707,16 @@ async def main(args):
                   const root=document.querySelector('#treemap .tm-leaf').__data__.ancestors().at(-1).data.ref;
                   const pending=[root];
                   while(pending.length){const n=pending.pop();
-                    if(n.name.startsWith('Other symbols'))return {stored:n.st,projected:n.pj,compressed:n.eg,compressible:n.cp};
+                    if(n.name.startsWith('Other symbols'))return {stored:n.st,projected:n.pj,compressed:n.eg,compressible:n.cp,matchedBss:n.cb};
                     pending.push(...(n.children||[]));
                   }
                   return null;
                 }""")
-                remainder_bytes = 6144 if hierarchy == 'kind' else 14336
+                remainder_bytes = 6144 if hierarchy == 'kind' else 10240
                 expected = {'stored': remainder_bytes, 'projected': remainder_bytes,
-                            'compressed': 4096, 'compressible': 8192}
+                            'compressed': 4096 if hierarchy == 'kind' else 12288,
+                            'compressible': 8192 if hierarchy == 'kind' else 16384,
+                            'matchedBss': 0 if hierarchy == 'kind' else 8192}
                 if not remainder or any(remainder.get(k) != v for k, v in expected.items()):
                     errors.append(f'{label}: {hierarchy} lazy remainder has incorrect compression metrics: {remainder}')
                 await pg.locator('#tmMeasure').select_option('live')
@@ -705,6 +727,105 @@ async def main(args):
                 }""")
                 if heap and refreshed != heap.get('fill'):
                     errors.append(f'{label}: {hierarchy} compression color changed after recomputation')
+            await pg.set_input_files('#fileIn', bss_compression_obj)
+            await pg.wait_for_timeout(300)
+            await pg.wait_for_function(READY, timeout=120000)
+
+            async def bss_tiles():
+                return await pg.evaluate("""() => Array.from(document.querySelectorAll('#treemap .tm-leaf'), el => {
+                  const d=el.__data__, n=d.data.ref;
+                  const hatch=Array.from(document.querySelectorAll('#treemap .tm-compressed-bss')).find(h=>h.__data__===d);
+                  return {name:n.name,level:n.level,stored:n.st,projected:n.pj,compressed:n.eg,compressible:n.cp,matchedBss:n.cb,
+                    fill:el.getAttribute('fill'),hatched:!!hatch,opacity:hatch?+hatch.getAttribute('opacity'):0,
+                    passThrough:!hatch||getComputedStyle(hatch).pointerEvents==='none',
+                    aligned:!hatch||['x','y','width','height'].every(a=>hatch.getAttribute(a)===el.getAttribute(a))};
+                })""")
+
+            async def compression_pattern(pattern):
+                await click('[data-view-workspace="footprint"][data-view="comp"]')
+                await pg.fill('#cPat', pattern)
+                await pg.locator('#cPat').press('Tab')
+                await click('[data-view-workspace="footprint"][data-view="treemap"]')
+
+            for hierarchy in ('source', 'kind'):
+                if hierarchy == 'kind':
+                    await pg.set_input_files('#fileIn', bss_compression_col)
+                    await pg.wait_for_timeout(300)
+                    await pg.wait_for_function(READY, timeout=120000)
+                await tree('treeMode', hierarchy)
+                await pg.select_option('#tmMeasure', 'pre')
+                await pg.select_option('#tmColor', 'comp')
+                aggregate = next((n for n in await bss_tiles() if n['matchedBss'] and n['level'] != 'sym'), None)
+                raw = 114688 if hierarchy == 'kind' else 151552
+                expected = {'stored': 81920 if hierarchy == 'kind' else 102400,
+                            'compressed': 65536 if hierarchy == 'kind' else 98304,
+                            'compressible': 65536 if hierarchy == 'kind' else 102400,
+                            'matchedBss': 65536, 'hatched': True,
+                            'fill': 'rgb(103, 164, 159)' if hierarchy == 'kind' else 'rgb(93, 159, 149)'}
+                if not aggregate or any(aggregate.get(k) != v for k, v in expected.items()) or abs(aggregate['opacity'] - 0.55 * 65536 / raw) > 1e-12:
+                    errors.append(f'{label}: {hierarchy} mixed BSS aggregate lost its coloring or accounting: {aggregate}')
+                if 'compression saves 48.0 KiB' not in await pg.locator('.mem-meta').first.text_content() or 'saving 48.0 KiB' not in await pg.locator('#compTake').text_content():
+                    errors.append(f'{label}: {hierarchy} compressed BSS was missing from total savings')
+                await pg.fill('#tmSearch', 'clade_bss_block')
+                await pg.locator('#tmSearch').press('Enter')
+                tiles = {n['name']: n for n in await bss_tiles()}
+                for name, size, matched, live in (
+                        ('clade_bss_block', 65536, True, True),
+                        ('ordinary_bss_block', 32768, False, True),
+                        ('missing_output_bss', 16384, False, True),
+                        ('eliminated_clade_bss', 16384, False, False)):
+                    tile = tiles.get(name)
+                    stored = size * 0.5 if matched else size if live else 0
+                    expected = {'stored': stored, 'projected': stored,
+                                'compressed': size if matched else 0, 'compressible': size if matched else 0,
+                                'matchedBss': size if matched else 0,
+                                'fill': 'rgb(42, 140, 126)' if matched else '#B9C3CC',
+                                'hatched': matched, 'opacity': 0.55 if matched else 0,
+                                'passThrough': True, 'aligned': True}
+                    if not tile or any(tile.get(k) != v for k, v in expected.items()):
+                        errors.append(f'{label}: {hierarchy} incorrect BSS compression tile: {tile}')
+                if 'BSS in compressed output sections' not in await pg.inner_text('#tmLegend'):
+                    errors.append(f'{label}: missing compressed BSS legend')
+                bss_leaf = pg.locator('#treemap .tm-leaf')
+                # The hatch must allow hover and clicks to reach the base tile.
+                for leaf in await bss_leaf.all():
+                    if await leaf.evaluate("el=>el.__data__.data.ref.name==='clade_bss_block'"):
+                        await leaf.hover()
+                        tip = await pg.inner_text('#tip')
+                        if 'compressed output sections' not in tip or 'stored at 50% of raw size' not in tip or 'stored compressed as 32.0 KiB' not in tip:
+                            errors.append(f'{label}: compressed BSS tooltip omitted its accounting')
+                        await leaf.click()
+                        break
+                await pg.select_option('#tmColor', 'kind')
+                if await pg.locator('#treemap .tm-compressed-bss').count():
+                    errors.append(f'{label}: BSS hatching leaked into kind coloring')
+                await pg.select_option('#tmColor', 'comp')
+                await compression_pattern('.bss')
+                tiles = {n['name']: n for n in await bss_tiles()}
+                if tiles.get('clade_bss_block', {}).get('hatched') or not tiles.get('ordinary_bss_block', {}).get('hatched'):
+                    errors.append(f'{label}: {hierarchy} BSS hatching did not follow pattern changes')
+                if 'saving 16.0 KiB' not in await pg.locator('#compTake').text_content():
+                    errors.append(f'{label}: BSS-only compression summary was incorrect')
+                await compression_pattern('.*clade*')
+                # Matched BSS follows the data ratio, independently of code.
+                await pg.evaluate("""() => {
+                  const input=document.querySelector('#cData');input.value=80;
+                  input.dispatchEvent(new Event('change',{bubbles:true}));
+                }""")
+                await pg.select_option('#tmMeasure', 'stored')
+                tile = next((n for n in await bss_tiles() if n['name'] == 'clade_bss_block'), None)
+                if not tile or tile['stored'] != 65536 * 0.8 or tile['projected'] != 65536 * 0.8 or not tile['hatched']:
+                    errors.append(f'{label}: {hierarchy} BSS did not follow the data ratio: {tile}')
+                if 'saving 19.2 KiB' not in await pg.locator('#compTake').text_content():
+                    errors.append(f'{label}: {hierarchy} BSS savings did not follow the data ratio')
+                await pg.evaluate("""() => {
+                  const input=document.querySelector('#cCode');input.value=20;
+                  input.dispatchEvent(new Event('change',{bubbles:true}));
+                }""")
+                refreshed = next((n for n in await bss_tiles() if n['name'] == 'clade_bss_block'), None)
+                if not refreshed or refreshed['stored'] != 65536 * 0.8 or refreshed['projected'] != 65536 * 0.8:
+                    errors.append(f'{label}: {hierarchy} BSS incorrectly followed the code ratio: {refreshed}')
+                await snapshot(f'treemap-compressed-bss-{hierarchy}')
             overflow = await pg.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
             if overflow:
                 errors.append(f"{width}px: page scrolls sideways")
